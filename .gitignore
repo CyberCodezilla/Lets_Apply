@@ -28,4 +28,3 @@ web-ext.config.ts
 # Environment & API Keys
 .env
 .env.*
-!.env.example
