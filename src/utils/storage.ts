@@ -9,7 +9,7 @@ const STORAGE_KEYS = {
 // ─── Profile ────────────────────────────────────────────────
 export async function getProfile(): Promise<UserProfile | null> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.PROFILE);
-  return result[STORAGE_KEYS.PROFILE] ?? null;
+  return (result[STORAGE_KEYS.PROFILE] as UserProfile) ?? null;
 }
 
 export async function saveProfile(profile: UserProfile): Promise<void> {
@@ -19,7 +19,7 @@ export async function saveProfile(profile: UserProfile): Promise<void> {
 // ─── Job Context ────────────────────────────────────────────
 export async function getJobContext(): Promise<JobContext | null> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.JOB_CONTEXT);
-  return result[STORAGE_KEYS.JOB_CONTEXT] ?? null;
+  return (result[STORAGE_KEYS.JOB_CONTEXT] as JobContext) ?? null;
 }
 
 export async function saveJobContext(context: JobContext): Promise<void> {
@@ -29,7 +29,7 @@ export async function saveJobContext(context: JobContext): Promise<void> {
 // ─── Application History ────────────────────────────────────
 export async function getHistory(): Promise<ApplicationRecord[]> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.HISTORY);
-  return result[STORAGE_KEYS.HISTORY] ?? [];
+  return (result[STORAGE_KEYS.HISTORY] as ApplicationRecord[]) ?? [];
 }
 
 export async function addToHistory(record: ApplicationRecord): Promise<void> {
