@@ -34,6 +34,9 @@ export default function App() {
         if (!p.config.groqApiKey && apiKey) {
           p.config.groqApiKey = apiKey;
         }
+        if (!p.config.selectedModel && import.meta.env.WXT_GROQ_MODEL) {
+          p.config.selectedModel = import.meta.env.WXT_GROQ_MODEL as string;
+        }
         setProfile(p);
         setPanelState('ready');
       }

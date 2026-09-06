@@ -41,6 +41,12 @@ export default function App() {
             groqApiKey: import.meta.env.WXT_GROQ_API_KEY as string,
           };
         }
+        if (!stored.config?.selectedModel && import.meta.env.WXT_GROQ_MODEL) {
+          stored.config = {
+            ...(stored.config || {}),
+            selectedModel: import.meta.env.WXT_GROQ_MODEL as string,
+          };
+        }
         setProfile(stored);
       }
       setLoaded(true);

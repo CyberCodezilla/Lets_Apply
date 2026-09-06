@@ -1,6 +1,10 @@
 import type { UserProfile, JobContext, MatchResult, ScreeningQuestion } from '../types';
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_BASE_URL = (import.meta.env.WXT_GROQ_BASE_URL as string) || 'https://api.groq.com/openai/v1';
+const GROQ_API_URL = `${GROQ_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
+const DEFAULT_MAX_TOKENS = Number(import.meta.env.WXT_AI_MAX_TOKENS) || 2048;
+const MAX_WORDS = Number(import.meta.env.WXT_MAX_ANSWER_WORDS) || 120;
+const DEFAULT_TEMPERATURE = Number(import.meta.env.WXT_AI_TEMPERATURE) || 0.3;
 
 function buildSystemPrompt(profile: UserProfile): string {
   // Omit API key from the profile data sent in prompts
@@ -19,7 +23,7 @@ GROUND RULES:
 1. Use ONLY the skills, projects, metrics, and experiences provided in the Candidate Profile.
 2. NEVER fabricate, exaggerate, or assume any experience, company, tool, or metric not explicitly listed.
 3. If the candidate profile does not possess a requested skill, answer honestly by highlighting the closest related verified skill and eagerness to learn.
-4. Keep all responses concise, punchy, and under 120 words per question.
+4. Keep all responses concise, punchy, and under ${MAX_WORDS} words per question.
 5. Avoid generic boilerplate (e.g., "I am a hard-working student"). Lead with direct project names and technical outcomes.
 
 CANDIDATE PROFILE:
@@ -31,7 +35,7 @@ async function callGroq(
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  temperature: number = 0.3
+  temperature: number = DEFAULT_TEMPERATURE
 ): Promise<string> {
   const response = await fetch(GROQ_API_URL, {
     method: 'POST',
@@ -46,7 +50,7 @@ async function callGroq(
         { role: 'user', content: userPrompt },
       ],
       temperature,
-      max_tokens: 2048,
+      max_tokens: DEFAULT_MAX_TOKENS,
     }),
   });
 
@@ -124,7 +128,7 @@ export async function generateAnswers(
     .join('\n');
 
   const userPrompt = `Answer these screening questions for the internship at ${jobContext.company} (${jobContext.title}).
-Each answer should be specific, metric-backed when possible, and under 120 words. Lead with project names and technical outcomes.
+Each answer should be specific, metric-backed when possible, and under ${MAX_WORDS} words. Lead with project names and technical outcomes.
 
 Return a JSON object mapping question IDs to answers (no markdown, no extra text):
 {"<question_id>": "<answer>", ...}
@@ -174,7 +178,7 @@ export async function regenerateAnswer(
   const systemPrompt = buildSystemPrompt(profile);
 
   const userPrompt = `Answer this screening question for the internship at ${jobContext.company} (${jobContext.title}).
-The answer should be specific, metric-backed when possible, and under 120 words. Lead with project names and technical outcomes.
+The answer should be specific, metric-backed when possible, and under ${MAX_WORDS} words. Lead with project names and technical outcomes.
 
 Return ONLY the answer text, no JSON, no quotes, no markdown.
 
