@@ -27,9 +27,13 @@ export default function App() {
   // Load profile on mount
   useEffect(() => {
     getProfile().then((p) => {
-      if (!p || !p.config.groqApiKey) {
+      const apiKey = p?.config?.groqApiKey || (import.meta.env.WXT_GROQ_API_KEY as string);
+      if (!p || !apiKey) {
         setPanelState('no-profile');
       } else {
+        if (!p.config.groqApiKey && apiKey) {
+          p.config.groqApiKey = apiKey;
+        }
         setProfile(p);
         setPanelState('ready');
       }

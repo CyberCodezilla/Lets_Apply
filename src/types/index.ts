@@ -144,7 +144,7 @@ export const DEFAULT_PROFILE: UserProfile = {
     workMode: 'Any',
   },
   config: {
-    groqApiKey: '',
+    groqApiKey: (import.meta.env.WXT_GROQ_API_KEY as string) || '',
     selectedModel: 'llama-3.3-70b-versatile',
   },
 };

@@ -34,7 +34,15 @@ export default function App() {
   // Load profile from storage on mount
   useEffect(() => {
     getProfile().then((stored) => {
-      if (stored) setProfile(stored);
+      if (stored) {
+        if (!stored.config?.groqApiKey && import.meta.env.WXT_GROQ_API_KEY) {
+          stored.config = {
+            ...stored.config,
+            groqApiKey: import.meta.env.WXT_GROQ_API_KEY as string,
+          };
+        }
+        setProfile(stored);
+      }
       setLoaded(true);
     });
   }, []);
