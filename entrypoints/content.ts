@@ -254,6 +254,72 @@ async function scrapeJobPage(): Promise<JobContext> {
   };
 }
 
+// ─── Cover Letter Helper ────────────────────────────────────
+function findCoverLetterTextarea(scope: HTMLElement | Document): HTMLTextAreaElement | null {
+  const selectors = [
+    'textarea#cover_letter',
+    '#cover_letter textarea',
+    '#cover_letter_holder textarea',
+    '.cover_letter_holder textarea',
+    '#cover_letter_container textarea',
+    '.cover_letter_container textarea',
+    'textarea[name="cover_letter"]',
+    'textarea[name*="cover"]',
+    'textarea[id*="cover"]',
+    'textarea[placeholder*="Mention in detail"]',
+    'textarea[placeholder*="relevant skill"]',
+    'textarea[placeholder*="Why should you be hired"]',
+    'textarea[placeholder*="cover letter"]',
+    'textarea[placeholder*="experience"]',
+    '.cover_letter textarea',
+    '.cover-letter textarea',
+    '#application_form textarea',
+    '.application_modal textarea',
+    '.modal-body textarea',
+    '.modal-content textarea',
+  ];
+
+  // Try in scope first
+  for (const sel of selectors) {
+    const el = scope.querySelector<HTMLTextAreaElement>(sel);
+    if (el && el instanceof HTMLTextAreaElement && !isInsideFilterOrNav(el)) {
+      return el;
+    }
+  }
+
+  // Try document-wide
+  for (const sel of selectors) {
+    const el = document.querySelector<HTMLTextAreaElement>(sel);
+    if (el && el instanceof HTMLTextAreaElement && !isInsideFilterOrNav(el)) {
+      return el;
+    }
+  }
+
+  // Fallback: look in container with "cover letter" or "why should you be hired" in its text
+  const headings = Array.from(document.querySelectorAll('label, h1, h2, h3, h4, h5, h6, .heading_6, p, div'));
+  for (const h of headings) {
+    if (isInsideFilterOrNav(h)) continue;
+    const txt = (h.textContent || '').toLowerCase();
+    if (txt.includes('why should you be hired') || txt.includes('cover letter')) {
+      const container = h.closest('.form-group, .custom_question_container, .modal-body, div');
+      const ta = container?.querySelector<HTMLTextAreaElement>('textarea');
+      if (ta && ta instanceof HTMLTextAreaElement && !isInsideFilterOrNav(ta)) {
+        return ta;
+      }
+    }
+  }
+
+  // Fallback: first visible textarea in modal
+  const allTextareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>('.modal textarea, [role="dialog"] textarea, #application_modal textarea, textarea'));
+  for (const ta of allTextareas) {
+    if (!isInsideFilterOrNav(ta) && ta.clientHeight > 20) {
+      return ta;
+    }
+  }
+
+  return null;
+}
+
 function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQuestion[] {
   const questions: ScreeningQuestion[] = [];
   const seenIds = new Set<string>();
@@ -264,10 +330,7 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
   };
 
   // 1. Cover Letter textarea
-  const coverLetterEl =
-    scope.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], textarea[placeholder*="Why should you be hired"]') ||
-    document.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"]');
-  
+  const coverLetterEl = findCoverLetterTextarea(scope);
   if (coverLetterEl && !isExcluded(coverLetterEl)) {
     coverLetterEl.setAttribute('data-lets-apply-id', 'cover_letter');
     questions.push({
@@ -277,6 +340,7 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
     });
     seenIds.add('cover_letter');
     if (coverLetterEl.id) seenIds.add(coverLetterEl.id);
+    if (coverLetterEl.name) seenIds.add(coverLetterEl.name);
   }
 
   // 2. Custom employer assessment questions and availability containers
@@ -289,6 +353,9 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
   questionContainers.forEach((container, index) => {
     if (isExcluded(container)) return;
 
+    // Skip if container already holds the cover letter textarea
+    if (coverLetterEl && container.contains(coverLetterEl)) return;
+
     const labelEl =
       container.querySelector('.assessment_label') ||
       container.querySelector('.question_text') ||
@@ -296,7 +363,7 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
       container.querySelector('label');
     
     const label = labelEl?.textContent?.trim();
-    if (!label || label.toLowerCase().includes('cover letter')) return;
+    if (!label) return;
 
     // Must NOT be a search filter label
     const lowerLabel = label.toLowerCase();
@@ -391,8 +458,10 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
     const textareas = Array.from(appContainer.querySelectorAll('textarea'));
     textareas.forEach((ta, idx) => {
       if (isExcluded(ta)) return;
+      if (coverLetterEl && ta === coverLetterEl) return;
+
       const id = ta.id || ta.name || `app_ta_${idx}`;
-      if (seenIds.has(id) || seenIds.has(ta.id) || id.toLowerCase().includes('cover')) return;
+      if (seenIds.has(id) || seenIds.has(ta.id)) return;
 
       const label =
         ta.closest('.form-group')?.querySelector('label, p, .item_heading')?.textContent?.trim() ||
@@ -414,48 +483,101 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
 }
 
 // ─── Form Auto-Fill ─────────────────────────────────────────
-function setNativeValue(element: HTMLTextAreaElement | HTMLInputElement, value: string): void {
-  const isTextArea = element instanceof HTMLTextAreaElement;
+function setNativeValue(element: HTMLElement, value: string): boolean {
+  // Unpack container if a wrapper div was passed
+  let target: HTMLTextAreaElement | HTMLInputElement;
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    target = element;
+  } else {
+    const inner = element.querySelector<HTMLTextAreaElement | HTMLInputElement>('textarea, input[type="text"]');
+    if (inner) {
+      target = inner;
+    } else {
+      console.warn('[Lets Apply] Cannot set value: element is not a text input or textarea', element);
+      return false;
+    }
+  }
+
+  const isTextArea = target instanceof HTMLTextAreaElement;
   const prototype = isTextArea ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
 
-  if (descriptor?.set) {
-    descriptor.set.call(element, value);
-  } else {
-    element.value = value;
+  target.focus();
+  if ('select' in target) {
+    try {
+      (target as HTMLInputElement | HTMLTextAreaElement).select();
+    } catch {}
   }
 
-  element.dispatchEvent(new Event('input', { bubbles: true }));
-  element.dispatchEvent(new Event('change', { bubbles: true }));
-  element.dispatchEvent(new Event('blur', { bubbles: true }));
+  // 1. Attempt document.execCommand('insertText') - native browser simulation
+  let execSuccess = false;
+  try {
+    target.selectionStart = 0;
+    target.selectionEnd = target.value.length;
+    execSuccess = document.execCommand('insertText', false, value);
+  } catch {}
 
-  // Visual feedback: green glow animation
-  element.style.transition = 'box-shadow 0.3s ease, border-color 0.3s ease';
-  element.style.boxShadow = '0 0 0 3px rgba(34, 197, 94, 0.4)';
-  element.style.borderColor = '#22c55e';
+  // 2. Set value directly via native prototype setter and reset React's valueTracker
+  if (!execSuccess || target.value !== value) {
+    const tracker = (target as unknown as { _valueTracker?: { setValue: (v: string) => void } })._valueTracker;
+    if (tracker) {
+      tracker.setValue('');
+    }
+
+    if (descriptor?.set) {
+      descriptor.set.call(target, value);
+    } else {
+      target.value = value;
+    }
+  }
+
+  // 3. Dispatch full event cascade (focus -> keydown -> keypress -> input -> keyup -> change -> blur)
+  target.dispatchEvent(new Event('focus', { bubbles: true }));
+  target.dispatchEvent(new Event('keydown', { bubbles: true }));
+  target.dispatchEvent(new Event('keypress', { bubbles: true }));
+
+  try {
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+  } catch {
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  target.dispatchEvent(new Event('keyup', { bubbles: true }));
+  target.dispatchEvent(new Event('change', { bubbles: true }));
+  target.dispatchEvent(new Event('blur', { bubbles: true }));
+
+  // 4. Visual feedback: bright green outline and glowing box-shadow
+  target.style.transition = 'box-shadow 0.3s ease, border-color 0.3s ease, outline 0.3s ease';
+  target.style.boxShadow = '0 0 0 3px rgba(34, 197, 94, 0.4)';
+  target.style.borderColor = '#22c55e';
+  target.style.outline = '2px solid #22c55e';
   setTimeout(() => {
-    element.style.boxShadow = '';
-    element.style.borderColor = '';
+    target.style.boxShadow = '';
+    target.style.borderColor = '';
+    target.style.outline = '';
   }, 2500);
+
+  return true;
 }
 
 async function fillForm(payload: FillFormPayload): Promise<FillResultPayload> {
   const scope = getActiveScope();
   let filledCount = 0;
 
+  console.log('[Lets Apply] fillForm started. Answers:', payload.answers);
+
   for (const [fieldId, rawAnswer] of Object.entries(payload.answers)) {
     const answerText = (rawAnswer || '').trim();
     if (!answerText) continue;
 
     // 1. Cover letter
-    if (fieldId === 'cover_letter') {
-      const clEl =
-        scope.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], [data-lets-apply-id="cover_letter"]') ||
-        document.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], [data-lets-apply-id="cover_letter"]');
+    if (fieldId === 'cover_letter' || fieldId.toLowerCase().includes('cover')) {
+      const clEl = findCoverLetterTextarea(scope);
       if (clEl) {
-        setNativeValue(clEl, answerText);
-        filledCount++;
-        continue;
+        if (setNativeValue(clEl, answerText)) {
+          filledCount++;
+          continue;
+        }
       }
     }
 
@@ -523,7 +645,6 @@ async function fillForm(payload: FillFormPayload): Promise<FillResultPayload> {
     );
     if (selectEl) {
       const normalized = answerText.toLowerCase();
-      let matched = false;
       for (const opt of Array.from(selectEl.options)) {
         if (
           opt.text.toLowerCase().includes(normalized) ||
@@ -531,7 +652,6 @@ async function fillForm(payload: FillFormPayload): Promise<FillResultPayload> {
           opt.value.toLowerCase() === normalized
         ) {
           selectEl.value = opt.value;
-          matched = true;
           break;
         }
       }
@@ -543,8 +663,8 @@ async function fillForm(payload: FillFormPayload): Promise<FillResultPayload> {
 
     // 4. Stamped Textarea or Text input
     let textEl =
-      scope.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[data-lets-apply-id="${fieldId}"], #${fieldId}, textarea[name="${fieldId}"], input[name="${fieldId}"]`) ||
-      document.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[data-lets-apply-id="${fieldId}"], #${fieldId}, textarea[name="${fieldId}"], input[name="${fieldId}"]`);
+      scope.querySelector<HTMLElement>(`[data-lets-apply-id="${fieldId}"], #${fieldId}, textarea[name="${fieldId}"], input[name="${fieldId}"]`) ||
+      document.querySelector<HTMLElement>(`[data-lets-apply-id="${fieldId}"], #${fieldId}, textarea[name="${fieldId}"], input[name="${fieldId}"]`);
 
     // Fallback: match by index
     if (!textEl) {
@@ -556,15 +676,27 @@ async function fillForm(payload: FillFormPayload): Promise<FillResultPayload> {
       }
     }
 
-    if (textEl && (textEl instanceof HTMLTextAreaElement || textEl instanceof HTMLInputElement)) {
-      setNativeValue(textEl, answerText);
-      filledCount++;
-      continue;
+    if (textEl) {
+      if (setNativeValue(textEl, answerText)) {
+        filledCount++;
+        continue;
+      }
+    }
+  }
+
+  // 5. Ultimate Fallback: If cover letter is still empty, and payload has a cover_letter answer (or first answer), fill the cover letter textarea!
+  const coverEl = findCoverLetterTextarea(scope);
+  if (coverEl && coverEl.value.trim() === '') {
+    const coverAnswer = payload.answers['cover_letter'] || Object.values(payload.answers)[0];
+    if (coverAnswer && coverAnswer.trim()) {
+      if (setNativeValue(coverEl, coverAnswer.trim())) {
+        filledCount++;
+      }
     }
   }
 
   // Scroll to first filled element or form area
-  const firstFilled = document.querySelector<HTMLElement>('[data-lets-apply-id], #application_form, #cover_letter_holder');
+  const firstFilled = document.querySelector<HTMLElement>('[data-lets-apply-id], #application_form, #cover_letter_holder, textarea');
   if (firstFilled) {
     firstFilled.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
