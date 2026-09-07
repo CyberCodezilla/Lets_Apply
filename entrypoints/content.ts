@@ -43,43 +43,42 @@ export default defineContentScript({
 
 // ─── DOM Scraping ───────────────────────────────────────────
 function getActiveScope(): HTMLElement | Document {
-  // 1. Check for visible modal / popup dialogs first
-  const modalCandidates = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      '.modal.show, .modal.in, [role="dialog"], .application_modal, #apply_modal, #easy_apply_modal, .modal-dialog, .modal-content, [class*="modal"][class*="open"], [class*="modal"][class*="active"], [class*="popup"]'
-    )
-  );
+  // 1. Check for visible application modal dialogs
+  const modalSelectors = [
+    '.modal.show .modal-content',
+    '.modal.in .modal-content',
+    '.modal-content',
+    '#application_modal',
+    '#apply_modal',
+    '#easy_apply_modal',
+    '.application_modal',
+    '[role="dialog"]',
+    '.modal.show',
+  ];
 
-  for (const el of modalCandidates) {
-    const style = window.getComputedStyle(el);
-    const rect = el.getBoundingClientRect();
-    if (
-      style.display !== 'none' &&
-      style.visibility !== 'hidden' &&
-      style.opacity !== '0' &&
-      rect.width > 200 &&
-      rect.height > 150
-    ) {
-      return el;
+  for (const sel of modalSelectors) {
+    const el = document.querySelector<HTMLElement>(sel);
+    if (el) {
+      const style = window.getComputedStyle(el);
+      if (style.display !== 'none' && style.visibility !== 'hidden' && el.clientHeight > 50) {
+        return el;
+      }
     }
   }
 
-  // 2. Check for any container with "Applying to ... internship" heading
-  const headings = Array.from(document.querySelectorAll<HTMLElement>('h1, h2, h3, h4, div'));
-  for (const h of headings) {
-    if (/Applying to\s+.*?\s+internship/i.test(h.textContent || '')) {
-      const container = h.closest<HTMLElement>('.modal, [role="dialog"], div[class*="modal"], div[class*="popup"], div[style*="z-index"]');
-      if (container) return container;
-    }
-  }
-
-  // 3. Detail page container fallback
+  // 2. Detail page container fallback (ignore search filters)
   const detailContainer = document.querySelector<HTMLElement>(
-    '.internship_details_container, .individual_internship_details, #internship_details'
+    '.internship_details_container, .individual_internship_details, #internship_details, .detail_view'
   );
   if (detailContainer) return detailContainer;
 
   return document;
+}
+
+function isInsideFilterOrNav(el: Element): boolean {
+  return Boolean(
+    el.closest('#filters_container, #filter_form, .filter_form, .filters, .filter_section, aside, nav, .navbar, header, footer, #header, #footer')
+  );
 }
 
 async function scrapeJobPage(): Promise<JobContext> {
@@ -90,31 +89,44 @@ async function scrapeJobPage(): Promise<JobContext> {
   // Check modal heading first (e.g., "Applying to Student Marketing internship")
   const headingEls = Array.from(scope.querySelectorAll('h1, h2, h3, h4, .modal-title, [class*="heading"]'));
   for (const h of headingEls) {
-    const match = (h.textContent || '').trim().match(/Applying to\s+(.*?)\s+internship/i);
+    if (isInsideFilterOrNav(h)) continue;
+    const text = (h.textContent || '').trim();
+    const match = text.match(/Applying to\s+(.*?)\s+internship/i);
     if (match && match[1]) {
       title = match[1].trim();
       break;
     }
   }
+
   if (!title) {
+    // Look inside active scope first, avoiding filter sidebar
     const titleSelectors = [
       '.job-internship-name',
-      '.profile_name',
       '.heading_4_5 a',
       '.heading_4_5',
-      '.profile',
-      'h1',
-      'h2'
+      '.profile_name',
+      'h1'
     ];
     for (const sel of titleSelectors) {
-      const el = scope.querySelector(sel);
-      if (el?.textContent?.trim()) {
-        title = el.textContent.trim();
-        break;
+      const els = Array.from(scope.querySelectorAll(sel));
+      for (const el of els) {
+        if (!isInsideFilterOrNav(el) && el.textContent?.trim()) {
+          title = el.textContent.trim();
+          break;
+        }
       }
+      if (title) break;
     }
   }
-  if (!title) title = 'Unknown Position';
+
+  // Fallback if scope was an apply modal that only says "Apply now"
+  if (!title || title.toLowerCase() === 'apply now') {
+    const detailTitle = document.querySelector('.internship_details_container h1, .individual_internship_details .heading_4_5 a, .heading_4_5 a');
+    if (detailTitle && !isInsideFilterOrNav(detailTitle)) {
+      title = detailTitle.textContent?.trim() || '';
+    }
+  }
+  if (!title || title.toLowerCase() === 'apply now') title = 'Internship Role';
 
   // Extract Company
   let company = '';
@@ -122,18 +134,27 @@ async function scrapeJobPage(): Promise<JobContext> {
     '.company-name',
     '.company_name a',
     '.company_name',
-    '.link_display_like_text',
-    '[class*="company"]'
+    '.link_display_like_text'
   ];
   for (const sel of companySelectors) {
-    const el = scope.querySelector(sel);
-    const txt = el?.textContent?.trim();
-    if (txt && !txt.toLowerCase().includes('actively hiring') && !txt.toLowerCase().includes('internshala')) {
-      company = txt;
-      break;
+    const els = Array.from(scope.querySelectorAll(sel));
+    for (const el of els) {
+      if (isInsideFilterOrNav(el)) continue;
+      const txt = el.textContent?.trim();
+      if (txt && !txt.toLowerCase().includes('actively hiring') && !txt.toLowerCase().includes('internshala')) {
+        company = txt;
+        break;
+      }
+    }
+    if (company) break;
+  }
+  if (!company) {
+    const pageCompany = document.querySelector('.individual_internship_details .company_name, .company-name');
+    if (pageCompany && !isInsideFilterOrNav(pageCompany)) {
+      company = pageCompany.textContent?.trim() || '';
     }
   }
-  if (!company) company = 'Unknown Company';
+  if (!company) company = 'Hiring Company';
 
   // Extract Location, Duration, Stipend
   let location = '';
@@ -145,6 +166,7 @@ async function scrapeJobPage(): Promise<JobContext> {
   );
 
   metaItems.forEach((item) => {
+    if (isInsideFilterOrNav(item)) return;
     const label =
       item.querySelector('.ic-location, .location_link, [class*="location"]')?.textContent?.trim() ||
       item.querySelector('.item_heading')?.textContent?.trim()?.toLowerCase() || '';
@@ -160,19 +182,13 @@ async function scrapeJobPage(): Promise<JobContext> {
     }
   });
 
-  // Regex-based fallbacks from scope text
   const scopeText = scope.textContent || '';
   if (!stipend) {
     const stipendMatch = scopeText.match(/(?:₹|INR)\s*[\d,]+(?:\s*-\s*[\d,]+)?\s*(?:\/\s*month|\/month)?/i);
-    if (stipendMatch) stipend = stipendMatch[0].trim();
+    if (stipendMatch && !stipendMatch[0].includes('999')) stipend = stipendMatch[0].trim();
   }
-  if (!location) {
-    if (/work from home/i.test(scopeText)) {
-      location = 'Work from home';
-    } else {
-      const locMatch = scope.querySelector('.location_link, #location_names a, [class*="location"]');
-      if (locMatch?.textContent?.trim()) location = locMatch.textContent.trim();
-    }
+  if (!location && /work from home/i.test(scopeText)) {
+    location = 'Work from home';
   }
   if (!duration) {
     const durMatch = scopeText.match(/\b\d+\s*(?:Month|Months|Week|Weeks)\b/i);
@@ -186,28 +202,31 @@ async function scrapeJobPage(): Promise<JobContext> {
     scope.querySelector('.individual_internship_details .text-container') ||
     scope.querySelector('.detail_view .text-container') ||
     scope.querySelector('[class*="about_internship"]') ||
-    scope.querySelector('[class*="role_overview"]');
+    document.querySelector('.internship_details_container .text-container');
   
   let description = descriptionEl?.textContent?.trim() || '';
-  if (!description && scopeText.length > 50) {
-    // Collect paragraphs or bullet points inside scope
+  if (!description && scopeText.length > 80 && scope !== document) {
     const pElements = Array.from(scope.querySelectorAll('p, li, .item_body'));
-    description = pElements.map((p) => p.textContent?.trim() || '').filter(Boolean).join('\n');
+    description = pElements
+      .filter((p) => !isInsideFilterOrNav(p))
+      .map((p) => p.textContent?.trim() || '')
+      .filter(Boolean)
+      .join('\n');
   }
 
   // Extract Requirements & Skills
   const requirements: string[] = [];
   const skillEls = scope.querySelectorAll(
-    '.round_tabs, .skill_tag, .required_skills_container .round_tabs_container .round_tabs, [class*="skill"]'
+    '.round_tabs, .skill_tag, .required_skills_container .round_tabs_container .round_tabs'
   );
   skillEls.forEach((el) => {
+    if (isInsideFilterOrNav(el)) return;
     const text = el.textContent?.trim();
     if (text && text.length < 50 && !requirements.includes(text)) {
       requirements.push(text);
     }
   });
 
-  // Check for inline Skills requirement text (e.g., "Skills: Leadership, Teamwork, ...")
   const skillsInlineMatch = scopeText.match(/Skills:\s*([^\n\r.]+)/i);
   if (skillsInlineMatch && skillsInlineMatch[1]) {
     const inlineSkills = skillsInlineMatch[1].split(',').map((s) => s.trim()).filter(Boolean);
@@ -216,10 +235,9 @@ async function scrapeJobPage(): Promise<JobContext> {
     });
   }
 
-  // Screening questions (search inside scope and entire document)
+  // Screening questions (ONLY real application questions, NEVER search filters!)
   const screeningQuestions = extractScreeningQuestions(scope);
 
-  // Generate job ID
   const jobId = `${cleanText(title).replace(/\s+/g, '_')}_${Date.now()}`;
 
   return {
@@ -240,11 +258,18 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
   const questions: ScreeningQuestion[] = [];
   const seenIds = new Set<string>();
 
-  // 1. Cover Letter
+  // Helper to check if element is part of search/filter UI
+  const isExcluded = (el: Element) => {
+    return isInsideFilterOrNav(el) ||
+      Boolean(el.closest('#filters_container, .filters_container, #filter_form, [class*="filter"]'));
+  };
+
+  // 1. Cover Letter textarea
   const coverLetterEl =
     scope.querySelector('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], textarea[placeholder*="Why should you be hired"]') ||
     document.querySelector('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"]');
-  if (coverLetterEl) {
+  
+  if (coverLetterEl && !isExcluded(coverLetterEl)) {
     questions.push({
       id: 'cover_letter',
       questionText: 'Cover Letter / Why should you be hired for this role?',
@@ -254,40 +279,40 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
     if (coverLetterEl.id) seenIds.add(coverLetterEl.id);
   }
 
-  // 2. Custom question containers
+  // 2. Custom employer assessment questions
+  // Internshala places custom assessment questions in containers with classes like .assessment_question, .additional_question
   const questionContainers = Array.from(
-    (scope === document ? document : scope).querySelectorAll(
-      '.assessment_question, .form-group:has(textarea), .application_question, .custom_question_container, [class*="question_container"], .form-group'
+    document.querySelectorAll(
+      '.assessment_question, .additional_question, #assessment_questions .form-group, .application_question, .custom_question_container'
     )
   );
 
   questionContainers.forEach((container, index) => {
+    if (isExcluded(container)) return;
+
     const labelEl =
-      container.querySelector('label') ||
       container.querySelector('.assessment_label') ||
       container.querySelector('.question_text') ||
-      container.querySelector('p, h4');
+      container.querySelector('label');
+    
     const label = labelEl?.textContent?.trim();
     if (!label || label.toLowerCase().includes('cover letter')) return;
 
+    // Must NOT be a search filter label (Profile, Location, Stipend, Duration)
+    const lowerLabel = label.toLowerCase();
+    if (
+      lowerLabel === 'profile' ||
+      lowerLabel === 'location' ||
+      lowerLabel.includes('stipend') ||
+      lowerLabel.includes('duration')
+    ) {
+      return;
+    }
+
     const textarea = container.querySelector('textarea');
     const textInput = container.querySelector('input[type="text"]');
-    const radioInputs = container.querySelectorAll('input[type="radio"]');
 
-    if (!textarea && !textInput && radioInputs.length === 0) return;
-
-    let inputType: ScreeningQuestion['inputType'] = 'textarea';
-    const options: string[] = [];
-
-    if (radioInputs.length > 0) {
-      inputType = 'radio';
-      radioInputs.forEach((radio) => {
-        const radioLabel = container.querySelector(`label[for="${radio.id}"]`)?.textContent?.trim();
-        if (radioLabel) options.push(radioLabel);
-      });
-    } else if (textInput && !textarea) {
-      inputType = 'text';
-    }
+    if (!textarea && !textInput) return;
 
     const elementId = textarea?.id || textInput?.id || `question_${index}`;
     if (!seenIds.has(elementId)) {
@@ -295,34 +320,39 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
       questions.push({
         id: elementId,
         questionText: label,
-        inputType,
-        ...(options.length > 0 ? { options } : {}),
+        inputType: textarea ? 'textarea' : 'text',
       });
     }
   });
 
-  // 3. Fallback: catch any standalone textareas inside the scope that might have been missed
-  const allTextareas = Array.from(scope.querySelectorAll('textarea'));
-  allTextareas.forEach((ta, idx) => {
-    const id = ta.id || ta.name || `textarea_${idx}`;
-    if (seenIds.has(id) || seenIds.has(ta.id)) return;
-    if (id.toLowerCase().includes('cover')) return;
+  // 3. Fallback: only check textareas specifically within the application modal or form
+  const appContainers = Array.from(
+    document.querySelectorAll(
+      '#application_form, .application_modal, #apply_modal, .modal-content:has(button[type="submit"]), .modal-content:has(#cover_letter_holder)'
+    )
+  );
 
-    // Find nearest question label or preceding element text
-    const label =
-      ta.closest('label')?.textContent?.trim() ||
-      ta.previousElementSibling?.textContent?.trim() ||
-      ta.parentElement?.querySelector('label, p, .item_heading')?.textContent?.trim() ||
-      ta.placeholder ||
-      `Question ${questions.length + 1}`;
+  for (const appContainer of appContainers) {
+    const textareas = Array.from(appContainer.querySelectorAll('textarea'));
+    textareas.forEach((ta, idx) => {
+      if (isExcluded(ta)) return;
+      const id = ta.id || ta.name || `app_ta_${idx}`;
+      if (seenIds.has(id) || seenIds.has(ta.id) || id.toLowerCase().includes('cover')) return;
 
-    seenIds.add(id);
-    questions.push({
-      id: ta.id || id,
-      questionText: label,
-      inputType: 'textarea',
+      const label =
+        ta.closest('.form-group')?.querySelector('label, p, .item_heading')?.textContent?.trim() ||
+        ta.previousElementSibling?.textContent?.trim() ||
+        ta.placeholder ||
+        `Screening Question ${questions.length + 1}`;
+
+      seenIds.add(id);
+      questions.push({
+        id: ta.id || id,
+        questionText: label,
+        inputType: 'textarea',
+      });
     });
-  });
+  }
 
   return questions;
 }
