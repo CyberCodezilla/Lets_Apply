@@ -13,6 +13,28 @@ import ActionFooter from './components/ActionFooter';
 
 type PanelState = 'loading-profile' | 'no-profile' | 'not-internshala' | 'ready' | 'analyzing' | 'review' | 'success' | 'error';
 
+async function sendTabMessage<T>(tabId: number, message: unknown): Promise<T> {
+  try {
+    return (await chrome.tabs.sendMessage(tabId, message)) as T;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Receiving end does not exist') || msg.includes('Could not establish connection')) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['content-scripts/content.js'],
+        });
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return (await chrome.tabs.sendMessage(tabId, message)) as T;
+      } catch (injectErr) {
+        console.error('Failed to auto-inject content script:', injectErr);
+        throw new Error('Please refresh (F5) the Internshala page and try again. (The tab was opened before the extension was loaded).');
+      }
+    }
+    throw err;
+  }
+}
+
 export default function App() {
   const [panelState, setPanelState] = useState<PanelState>('loading-profile');
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -58,8 +80,8 @@ export default function App() {
         return;
       }
 
-      // Scrape the page via content script
-      const scrapeResult = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_PAGE' }) as ScrapeResultPayload;
+      // Scrape the page via content script (with auto-inject fallback)
+      const scrapeResult = await sendTabMessage<ScrapeResultPayload>(tab.id, { type: 'SCRAPE_PAGE' });
 
       if (!scrapeResult.success || !scrapeResult.data) {
         throw new Error(scrapeResult.error || 'Failed to scrape page');
@@ -80,7 +102,12 @@ export default function App() {
       setPanelState('review');
     } catch (err) {
       console.error('Analysis error:', err);
-      setErrorMessage(err instanceof Error ? err.message : 'Unknown error occurred');
+      const msg = err instanceof Error ? err.message : 'Unknown error occurred';
+      if (msg.includes('Receiving end does not exist') || msg.includes('Could not establish connection')) {
+        setErrorMessage('Please refresh (F5) the Internshala page and click Retry. (The tab was opened before the extension was loaded).');
+      } else {
+        setErrorMessage(msg);
+      }
       setPanelState('error');
     }
   }, [profile]);
@@ -119,10 +146,10 @@ export default function App() {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) throw new Error('No active tab');
 
-      const result = await chrome.tabs.sendMessage(tab.id, {
+      const result = await sendTabMessage<FillResultPayload>(tab.id, {
         type: 'FILL_FORM',
         payload: { answers },
-      }) as FillResultPayload;
+      });
 
       if (result.success) {
         // Save to history
