@@ -30,28 +30,77 @@ CANDIDATE PROFILE:
 ${JSON.stringify(safeProfile, null, 2)}`;
 }
 
+function extractJson<T>(raw: string): T {
+  const trimmed = raw.trim();
+  // 1. Direct parse
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {}
+
+  // 2. Strip markdown code fence blocks (```json ... ```)
+  const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (codeBlockMatch && codeBlockMatch[1]) {
+    try {
+      return JSON.parse(codeBlockMatch[1].trim()) as T;
+    } catch {}
+  }
+
+  // 3. Balanced brace finder
+  const firstBrace = trimmed.indexOf('{');
+  if (firstBrace !== -1) {
+    let depth = 0;
+    for (let i = firstBrace; i < trimmed.length; i++) {
+      if (trimmed[i] === '{') depth++;
+      else if (trimmed[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          const candidate = trimmed.substring(firstBrace, i + 1);
+          try {
+            return JSON.parse(candidate) as T;
+          } catch {}
+        }
+      }
+    }
+  }
+
+  // 4. Regex fallback
+  const regexMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (regexMatch) {
+    return JSON.parse(regexMatch[0]) as T;
+  }
+
+  throw new Error('Could not parse JSON from model output');
+}
+
 async function callGroq(
   apiKey: string,
   model: string,
   systemPrompt: string,
   userPrompt: string,
-  temperature: number = DEFAULT_TEMPERATURE
+  temperature: number = DEFAULT_TEMPERATURE,
+  jsonMode: boolean = false
 ): Promise<string> {
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature,
+    max_tokens: DEFAULT_MAX_TOKENS,
+  };
+
+  if (jsonMode) {
+    body.response_format = { type: 'json_object' };
+  }
+
   const response = await fetch(GROQ_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature,
-      max_tokens: DEFAULT_MAX_TOKENS,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -113,14 +162,12 @@ Candidate's minimum stipend: ₹${profile.preferences.minStipend}/month`;
     profile.config.selectedModel,
     systemPrompt,
     userPrompt,
-    0.0 // Deterministic greedy decoding
+    0.0, // Deterministic greedy decoding
+    true // jsonMode: enforce strict JSON object format from Groq
   );
 
   try {
-    // Extract JSON from response (handle potential markdown wrapping)
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON found in response');
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = extractJson<{ score: number | string; rationale?: string[] }>(raw);
     const result: MatchResult = {
       score: Math.min(100, Math.max(0, Math.round(Number(parsed.score)) || 0)),
       rationale: Array.isArray(parsed.rationale) ? parsed.rationale.slice(0, 2) : [],
@@ -128,6 +175,15 @@ Candidate's minimum stipend: ₹${profile.preferences.minStipend}/month`;
     matchScoreCache.set(cacheKey, { result, timestamp: Date.now() });
     return result;
   } catch {
+    const scoreMatch = raw.match(/"score"\s*:\s*(\d+)/i);
+    if (scoreMatch && scoreMatch[1]) {
+      const result: MatchResult = {
+        score: Math.min(100, Math.max(0, parseInt(scoreMatch[1], 10))),
+        rationale: ['Compatibility score computed based on profile and requirements.'],
+      };
+      matchScoreCache.set(cacheKey, { result, timestamp: Date.now() });
+      return result;
+    }
     console.error('Failed to parse match score:', raw);
     return { score: 0, rationale: ['Unable to compute match score'] };
   }
@@ -165,14 +221,12 @@ ${questionsBlock}`;
     profile.config.selectedModel,
     systemPrompt,
     userPrompt,
-    0.4
+    0.3,
+    true // jsonMode
   );
 
   try {
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON found in response');
-    const parsed = JSON.parse(jsonMatch[0]);
-    // Validate all keys are strings
+    const parsed = extractJson<Record<string, unknown>>(raw);
     const result: Record<string, string> = {};
     for (const [key, value] of Object.entries(parsed)) {
       result[key] = String(value);
@@ -180,7 +234,6 @@ ${questionsBlock}`;
     return result;
   } catch {
     console.error('Failed to parse answers:', raw);
-    // Return empty answers with error indication
     const result: Record<string, string> = {};
     for (const q of questions) {
       result[q.id] = '[Error generating answer — please try again]';
