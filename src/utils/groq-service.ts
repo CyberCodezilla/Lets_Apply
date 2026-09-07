@@ -63,15 +63,33 @@ async function callGroq(
   return data.choices?.[0]?.message?.content ?? '';
 }
 
+// ─── Match Scoring Cache ─────────────────────────────────────
+const matchScoreCache = new Map<string, { result: MatchResult; timestamp: number }>();
+
 // ─── Match Scoring ──────────────────────────────────────────
 export async function computeMatchScore(
   profile: UserProfile,
   jobContext: JobContext
 ): Promise<MatchResult> {
+  // Fast cache check: avoids duplicate LLM network latency if analyzing the same job posting
+  const cacheKey = `${jobContext.title}::${jobContext.company}::${jobContext.requirements.join(',')}::${profile.skills.join(',')}`;
+  const cached = matchScoreCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+    return cached.result;
+  }
+
   const systemPrompt = buildSystemPrompt(profile);
 
-  const userPrompt = `Evaluate the compatibility between the candidate and this internship. Return a JSON object with EXACTLY this format (no markdown, no extra text):
-{"score": <number 0-100>, "rationale": ["<reason 1>", "<reason 2>"]}
+  const userPrompt = `You are a strict, deterministic hiring compatibility evaluator. 
+Calculate an objective compatibility score (0-100) using EXACTLY this scoring rubric:
+1. Technical & Required Skills Match (0-50 pts): Pro-rated strictly by the proportion of required job skills explicitly present in candidate's skills and projects. If 0 required skills match, award 0 pts.
+2. Direct Domain & Project Experience (0-30 pts): Award points only if candidate has built projects or held roles in this exact functional domain (e.g., marketing projects for marketing roles, software for software roles). Unrelated technical experience earns at most 5 pts.
+3. Field of Study / Role Match (0-10 pts): 10 pts if candidate's degree/target roles directly match the job function, otherwise 0 pts.
+4. Preferences & Logistics (0-10 pts): 5 pts if work mode matches, 5 pts if stipend >= candidate's minimum.
+Total score = sum of all 4 criteria (0 to 100).
+
+Return a JSON object with EXACTLY this format (no markdown, no extra text):
+{"score": <integer 0-100>, "rationale": ["<concise bullet point 1>", "<concise bullet point 2>"]}
 
 JOB DETAILS:
 Title: ${jobContext.title}
@@ -84,9 +102,9 @@ Description:
 ${jobContext.description}
 
 Requirements:
-${jobContext.requirements.join(', ')}
+${jobContext.requirements.join(', ') || 'None specified'}
 
-Candidate's target roles: ${profile.preferences.targetRoles.join(', ')}
+Candidate's target roles: ${profile.preferences.targetRoles.join(', ') || 'Any'}
 Candidate's preferred work mode: ${profile.preferences.workMode}
 Candidate's minimum stipend: ₹${profile.preferences.minStipend}/month`;
 
@@ -95,7 +113,7 @@ Candidate's minimum stipend: ₹${profile.preferences.minStipend}/month`;
     profile.config.selectedModel,
     systemPrompt,
     userPrompt,
-    0.2
+    0.0 // Deterministic greedy decoding
   );
 
   try {
@@ -103,10 +121,12 @@ Candidate's minimum stipend: ₹${profile.preferences.minStipend}/month`;
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON found in response');
     const parsed = JSON.parse(jsonMatch[0]);
-    return {
-      score: Math.min(100, Math.max(0, Number(parsed.score) || 0)),
+    const result: MatchResult = {
+      score: Math.min(100, Math.max(0, Math.round(Number(parsed.score)) || 0)),
       rationale: Array.isArray(parsed.rationale) ? parsed.rationale.slice(0, 2) : [],
     };
+    matchScoreCache.set(cacheKey, { result, timestamp: Date.now() });
+    return result;
   } catch {
     console.error('Failed to parse match score:', raw);
     return { score: 0, rationale: ['Unable to compute match score'] };
