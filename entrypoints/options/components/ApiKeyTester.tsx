@@ -10,10 +10,11 @@ interface ApiKeyTesterProps {
 }
 
 const MODELS = [
-  { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (Recommended)' },
-  { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant (Faster)' },
-  { value: 'llama-3.1-70b-versatile', label: 'Llama 3.1 70B Versatile' },
-  { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
+  { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (Recommended)' },
+  { value: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B (Fast & Accurate)' },
+  { value: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B (Fastest)' },
+  { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (Legacy)' },
+  { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant (Legacy)' },
 ];
 
 export default function ApiKeyTester({ apiKey, model, onApiKeyChange, onModelChange }: ApiKeyTesterProps) {
@@ -107,6 +108,9 @@ export default function ApiKeyTester({ apiKey, model, onApiKeyChange, onModelCha
               {m.label}
             </option>
           ))}
+          {!MODELS.some((m) => m.value === model) && model && (
+            <option value={model}>{model}</option>
+          )}
         </select>
       </div>
     </div>

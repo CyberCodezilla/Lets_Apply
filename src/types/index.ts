@@ -145,6 +145,6 @@ export const DEFAULT_PROFILE: UserProfile = {
   },
   config: {
     groqApiKey: (import.meta.env.WXT_GROQ_API_KEY as string) || '',
-    selectedModel: (import.meta.env.WXT_GROQ_MODEL as string) || 'llama-3.3-70b-versatile',
+    selectedModel: (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b',
   },
 };
