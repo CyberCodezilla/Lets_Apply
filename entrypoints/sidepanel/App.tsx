@@ -397,6 +397,8 @@ export default function App() {
                     key={q.id}
                     questionId={q.id}
                     questionText={q.questionText}
+                    inputType={q.inputType}
+                    options={q.options}
                     answer={answers[q.id] || ''}
                     onAnswerChange={handleAnswerChange}
                     onRegenerate={handleRegenerate}

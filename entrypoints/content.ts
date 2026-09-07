@@ -258,7 +258,6 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
   const questions: ScreeningQuestion[] = [];
   const seenIds = new Set<string>();
 
-  // Helper to check if element is part of search/filter UI
   const isExcluded = (el: Element) => {
     return isInsideFilterOrNav(el) ||
       Boolean(el.closest('#filters_container, .filters_container, #filter_form, [class*="filter"]'));
@@ -266,10 +265,11 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
 
   // 1. Cover Letter textarea
   const coverLetterEl =
-    scope.querySelector('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], textarea[placeholder*="Why should you be hired"]') ||
-    document.querySelector('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"]');
+    scope.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], textarea[placeholder*="Why should you be hired"]') ||
+    document.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"]');
   
   if (coverLetterEl && !isExcluded(coverLetterEl)) {
+    coverLetterEl.setAttribute('data-lets-apply-id', 'cover_letter');
     questions.push({
       id: 'cover_letter',
       questionText: 'Cover Letter / Why should you be hired for this role?',
@@ -279,11 +279,10 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
     if (coverLetterEl.id) seenIds.add(coverLetterEl.id);
   }
 
-  // 2. Custom employer assessment questions
-  // Internshala places custom assessment questions in containers with classes like .assessment_question, .additional_question
+  // 2. Custom employer assessment questions and availability containers
   const questionContainers = Array.from(
     document.querySelectorAll(
-      '.assessment_question, .additional_question, #assessment_questions .form-group, .application_question, .custom_question_container'
+      '.assessment_question, .additional_question, #assessment_questions .form-group, .application_question, .custom_question_container, #availability_holder, .availability_container, .form-group:has(input[type="radio"]), .form-group:has(select)'
     )
   );
 
@@ -293,39 +292,95 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
     const labelEl =
       container.querySelector('.assessment_label') ||
       container.querySelector('.question_text') ||
+      container.querySelector('.item_heading') ||
       container.querySelector('label');
     
     const label = labelEl?.textContent?.trim();
     if (!label || label.toLowerCase().includes('cover letter')) return;
 
-    // Must NOT be a search filter label (Profile, Location, Stipend, Duration)
+    // Must NOT be a search filter label
     const lowerLabel = label.toLowerCase();
     if (
       lowerLabel === 'profile' ||
       lowerLabel === 'location' ||
-      lowerLabel.includes('stipend') ||
-      lowerLabel.includes('duration')
+      lowerLabel.includes('desired minimum') ||
+      lowerLabel.includes('max. duration')
     ) {
       return;
     }
 
-    const textarea = container.querySelector('textarea');
-    const textInput = container.querySelector('input[type="text"]');
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea');
+    const select = container.querySelector<HTMLSelectElement>('select');
+    const radios = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
+    const textInput = container.querySelector<HTMLInputElement>('input[type="text"]');
 
-    if (!textarea && !textInput) return;
+    // Case A: Radio buttons group
+    if (radios.length > 0 && radios[0]) {
+      const radioName = radios[0].name || `radio_q_${index}`;
+      const elementId = `radio_${radioName}`;
+      if (!seenIds.has(elementId)) {
+        seenIds.add(elementId);
+        const options: string[] = [];
 
-    const elementId = textarea?.id || textInput?.id || `question_${index}`;
-    if (!seenIds.has(elementId)) {
-      seenIds.add(elementId);
-      questions.push({
-        id: elementId,
-        questionText: label,
-        inputType: textarea ? 'textarea' : 'text',
-      });
+        radios.forEach((r) => {
+          const optText =
+            r.parentElement?.textContent?.trim() ||
+            container.querySelector(`label[for="${r.id}"]`)?.textContent?.trim() ||
+            r.value;
+          if (optText && !options.includes(optText)) {
+            options.push(optText);
+          }
+          r.setAttribute('data-lets-apply-id', elementId);
+          r.setAttribute('data-lets-apply-option', optText);
+        });
+
+        questions.push({
+          id: elementId,
+          questionText: label,
+          inputType: 'radio',
+          options,
+        });
+      }
+      return;
+    }
+
+    // Case B: Select dropdown
+    if (select) {
+      const elementId = select.id || select.name || `select_q_${index}`;
+      if (!seenIds.has(elementId)) {
+        seenIds.add(elementId);
+        select.setAttribute('data-lets-apply-id', elementId);
+        const options = Array.from(select.options)
+          .map((o) => o.text.trim())
+          .filter((t) => Boolean(t) && !t.toLowerCase().includes('select'));
+
+        questions.push({
+          id: elementId,
+          questionText: label,
+          inputType: 'select',
+          options,
+        });
+      }
+      return;
+    }
+
+    // Case C: Textarea or Text Input
+    const targetEl = textarea || textInput;
+    if (targetEl) {
+      const elementId = targetEl.id || targetEl.name || `text_q_${index}`;
+      if (!seenIds.has(elementId)) {
+        seenIds.add(elementId);
+        targetEl.setAttribute('data-lets-apply-id', elementId);
+        questions.push({
+          id: elementId,
+          questionText: label,
+          inputType: textarea ? 'textarea' : 'text',
+        });
+      }
     }
   });
 
-  // 3. Fallback: only check textareas specifically within the application modal or form
+  // 3. Fallback: textareas inside application modal
   const appContainers = Array.from(
     document.querySelectorAll(
       '#application_form, .application_modal, #apply_modal, .modal-content:has(button[type="submit"]), .modal-content:has(#cover_letter_holder)'
@@ -346,8 +401,9 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
         `Screening Question ${questions.length + 1}`;
 
       seenIds.add(id);
+      ta.setAttribute('data-lets-apply-id', id);
       questions.push({
-        id: ta.id || id,
+        id,
         questionText: label,
         inputType: 'textarea',
       });
@@ -358,77 +414,159 @@ function extractScreeningQuestions(scope: HTMLElement | Document): ScreeningQues
 }
 
 // ─── Form Auto-Fill ─────────────────────────────────────────
+function setNativeValue(element: HTMLTextAreaElement | HTMLInputElement, value: string): void {
+  const isTextArea = element instanceof HTMLTextAreaElement;
+  const prototype = isTextArea ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+
+  if (descriptor?.set) {
+    descriptor.set.call(element, value);
+  } else {
+    element.value = value;
+  }
+
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  element.dispatchEvent(new Event('blur', { bubbles: true }));
+
+  // Visual feedback: green glow animation
+  element.style.transition = 'box-shadow 0.3s ease, border-color 0.3s ease';
+  element.style.boxShadow = '0 0 0 3px rgba(34, 197, 94, 0.4)';
+  element.style.borderColor = '#22c55e';
+  setTimeout(() => {
+    element.style.boxShadow = '';
+    element.style.borderColor = '';
+  }, 2500);
+}
+
 async function fillForm(payload: FillFormPayload): Promise<FillResultPayload> {
   const scope = getActiveScope();
   let filledCount = 0;
 
-  for (const [fieldId, answerText] of Object.entries(payload.answers)) {
-    let element: HTMLElement | null = null;
+  for (const [fieldId, rawAnswer] of Object.entries(payload.answers)) {
+    const answerText = (rawAnswer || '').trim();
+    if (!answerText) continue;
 
+    // 1. Cover letter
     if (fieldId === 'cover_letter') {
-      element =
-        scope.querySelector('#cover_letter_holder textarea') ||
-        scope.querySelector('#cover_letter') ||
-        scope.querySelector('textarea[name="cover_letter"]') ||
-        document.querySelector('#cover_letter_holder textarea') ||
-        document.querySelector('#cover_letter') ||
-        document.querySelector('textarea[name="cover_letter"]');
-    } else {
-      element =
-        scope.querySelector(`#${fieldId}`) ||
-        scope.querySelector(`textarea[name="${fieldId}"]`) ||
-        scope.querySelector(`input[name="${fieldId}"]`) ||
-        document.getElementById(fieldId) ||
-        document.querySelector(`textarea[name="${fieldId}"]`) ||
-        document.querySelector(`input[name="${fieldId}"]`);
+      const clEl =
+        scope.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], [data-lets-apply-id="cover_letter"]') ||
+        document.querySelector<HTMLTextAreaElement>('#cover_letter_holder textarea, #cover_letter, textarea[name="cover_letter"], [data-lets-apply-id="cover_letter"]');
+      if (clEl) {
+        setNativeValue(clEl, answerText);
+        filledCount++;
+        continue;
+      }
     }
 
-    // Fallback: if fieldId is an index or generic id, try matching by position
-    if (!element && fieldId.startsWith('textarea_')) {
-      const idx = parseInt(fieldId.replace('textarea_', ''), 10);
-      const allTas = scope.querySelectorAll('textarea');
-      if (allTas[idx]) element = allTas[idx];
-    }
+    // 2. Radio button questions
+    const radios = Array.from(
+      document.querySelectorAll<HTMLInputElement>(
+        `input[type="radio"][data-lets-apply-id="${fieldId}"], input[type="radio"][name="${fieldId.replace('radio_', '')}"]`
+      )
+    );
 
-    if (element && (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement)) {
-      // Set value via native setter to bypass framework getter/setter traps
-      const nativeInputValueSetter =
-        element instanceof HTMLTextAreaElement
-          ? Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-          : Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (radios.length > 0) {
+      const normalized = answerText.toLowerCase();
+      let matchedRadio: HTMLInputElement | null = null;
 
-      if (nativeInputValueSetter) {
-        nativeInputValueSetter.call(element, answerText);
-      } else {
-        element.value = answerText;
+      for (const r of radios) {
+        const optAttr = (r.getAttribute('data-lets-apply-option') || '').toLowerCase();
+        const parentText = (r.parentElement?.textContent || '').toLowerCase();
+        const rVal = (r.value || '').toLowerCase();
+
+        if (
+          (optAttr && (optAttr.includes(normalized) || normalized.includes(optAttr))) ||
+          (parentText && (parentText.includes(normalized) || normalized.includes(parentText))) ||
+          (rVal && (rVal.includes(normalized) || normalized.includes(rVal)))
+        ) {
+          matchedRadio = r;
+          break;
+        }
+
+        // Fuzzy match for common Yes/No
+        if (normalized.startsWith('yes') && (parentText.includes('yes') || optAttr.includes('yes') || rVal === 'yes')) {
+          matchedRadio = r;
+          break;
+        }
+        if (normalized.startsWith('no') && (parentText.includes('no') || optAttr.includes('no') || rVal === 'no')) {
+          matchedRadio = r;
+          break;
+        }
       }
 
-      // Dispatch synthetic events for React/jQuery/Angular detection
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-      element.dispatchEvent(new Event('change', { bubbles: true }));
-      element.dispatchEvent(new Event('blur', { bubbles: true }));
+      if (!matchedRadio && radios.length > 0) {
+        matchedRadio = radios[0] || null;
+      }
 
-      // Visual feedback: green highlight animation
-      element.style.transition = 'box-shadow 0.3s ease, border-color 0.3s ease';
-      element.style.boxShadow = '0 0 0 3px rgba(34, 197, 94, 0.4)';
-      element.style.borderColor = '#22c55e';
-      setTimeout(() => {
-        element!.style.boxShadow = '';
-        element!.style.borderColor = '';
-      }, 2000);
+      if (matchedRadio) {
+        matchedRadio.checked = true;
+        matchedRadio.click();
+        matchedRadio.dispatchEvent(new Event('change', { bubbles: true }));
+        matchedRadio.dispatchEvent(new Event('input', { bubbles: true }));
 
+        const parent = matchedRadio.closest('label, .radio, div') || matchedRadio;
+        (parent as HTMLElement).style.transition = 'outline 0.3s ease';
+        (parent as HTMLElement).style.outline = '2px solid #22c55e';
+        setTimeout(() => {
+          (parent as HTMLElement).style.outline = '';
+        }, 2500);
+
+        filledCount++;
+        continue;
+      }
+    }
+
+    // 3. Select dropdowns
+    const selectEl = document.querySelector<HTMLSelectElement>(
+      `select[data-lets-apply-id="${fieldId}"], select#${fieldId}, select[name="${fieldId}"]`
+    );
+    if (selectEl) {
+      const normalized = answerText.toLowerCase();
+      let matched = false;
+      for (const opt of Array.from(selectEl.options)) {
+        if (
+          opt.text.toLowerCase().includes(normalized) ||
+          normalized.includes(opt.text.toLowerCase()) ||
+          opt.value.toLowerCase() === normalized
+        ) {
+          selectEl.value = opt.value;
+          matched = true;
+          break;
+        }
+      }
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      selectEl.dispatchEvent(new Event('input', { bubbles: true }));
       filledCount++;
+      continue;
+    }
+
+    // 4. Stamped Textarea or Text input
+    let textEl =
+      scope.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[data-lets-apply-id="${fieldId}"], #${fieldId}, textarea[name="${fieldId}"], input[name="${fieldId}"]`) ||
+      document.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[data-lets-apply-id="${fieldId}"], #${fieldId}, textarea[name="${fieldId}"], input[name="${fieldId}"]`);
+
+    // Fallback: match by index
+    if (!textEl) {
+      const idxMatch = fieldId.match(/_(\d+)$/);
+      if (idxMatch && idxMatch[1]) {
+        const idx = parseInt(idxMatch[1], 10);
+        const allTextareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>('#application_form textarea, .application_modal textarea, .modal textarea'));
+        if (allTextareas[idx]) textEl = allTextareas[idx] || null;
+      }
+    }
+
+    if (textEl && (textEl instanceof HTMLTextAreaElement || textEl instanceof HTMLInputElement)) {
+      setNativeValue(textEl, answerText);
+      filledCount++;
+      continue;
     }
   }
 
-  // Scroll to the application form area
-  const formArea =
-    scope.querySelector('#application_form') ||
-    scope.querySelector('.apply_form_container') ||
-    scope.querySelector('#cover_letter_holder') ||
-    scope.querySelector('textarea');
-  if (formArea) {
-    formArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Scroll to first filled element or form area
+  const firstFilled = document.querySelector<HTMLElement>('[data-lets-apply-id], #application_form, #cover_letter_holder');
+  if (firstFilled) {
+    firstFilled.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   return {

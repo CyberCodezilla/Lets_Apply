@@ -49,7 +49,7 @@ export interface ExperienceEntry {
 export interface ScreeningQuestion {
   id: string;
   questionText: string;
-  inputType: 'textarea' | 'radio' | 'text';
+  inputType: 'textarea' | 'radio' | 'text' | 'select';
   options?: string[];
 }
 
