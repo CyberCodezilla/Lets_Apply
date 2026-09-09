@@ -11,6 +11,7 @@ import TagInput from './components/TagInput';
 import ProjectForm from './components/ProjectForm';
 import ExperienceForm from './components/ExperienceForm';
 import ApiKeyTester from './components/ApiKeyTester';
+import { parseResumeWithAI } from '../../src/utils/groq-service';
 
 type TabId = 'resume' | 'personal' | 'education' | 'skills' | 'projects' | 'experience' | 'preferences' | 'api';
 
@@ -29,6 +30,7 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
   const [activeTab, setActiveTab] = useState<TabId>('resume');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [resumeSuccessSummary, setResumeSuccessSummary] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   // Load profile from storage on mount
@@ -72,10 +74,62 @@ export default function App() {
     setTimeout(() => setSaveStatus('idle'), 2000);
   }, [profile]);
 
-  // Handle resume text extraction
-  const handleResumeExtracted = useCallback((_text: string) => {
-    // For now, just show success — user fills details manually
-  }, []);
+  // Handle resume text extraction & AI auto-population
+  const handleResumeExtracted = useCallback(
+    async (text: string) => {
+      setResumeSuccessSummary(null);
+
+      const apiKey = profile.config?.groqApiKey || (import.meta.env.WXT_GROQ_API_KEY as string);
+      if (!apiKey) {
+        throw new Error('Please configure your Groq API key in the "API Settings" tab first so AI can parse your resume.');
+      }
+
+      const parsed = await parseResumeWithAI(text, apiKey, profile.config?.selectedModel);
+
+      // Deep merge with existing profile
+      setProfile((prev) => {
+        const updated: UserProfile = {
+          ...prev,
+          personal: {
+            fullName: parsed.personal?.fullName || prev.personal.fullName,
+            email: parsed.personal?.email || prev.personal.email,
+            phone: parsed.personal?.phone || prev.personal.phone,
+            location: parsed.personal?.location || prev.personal.location,
+            portfolioUrl: parsed.personal?.portfolioUrl || prev.personal.portfolioUrl,
+            githubUrl: parsed.personal?.githubUrl || prev.personal.githubUrl,
+            linkedinUrl: parsed.personal?.linkedinUrl || prev.personal.linkedinUrl,
+          },
+          education: {
+            degree: parsed.education?.degree || prev.education.degree,
+            institution: parsed.education?.institution || prev.education.institution,
+            graduationYear: Number(parsed.education?.graduationYear) || prev.education.graduationYear,
+            cgpaOrPercentage: parsed.education?.cgpaOrPercentage || prev.education.cgpaOrPercentage,
+          },
+          skills: Array.from(new Set([...(prev.skills || []), ...(parsed.skills || [])])),
+          projects: parsed.projects && parsed.projects.length > 0 ? parsed.projects : prev.projects,
+          experience: parsed.experience && parsed.experience.length > 0 ? parsed.experience : prev.experience,
+          preferences: {
+            ...prev.preferences,
+            targetRoles:
+              parsed.preferences?.targetRoles && parsed.preferences.targetRoles.length > 0
+                ? Array.from(new Set([...prev.preferences.targetRoles, ...parsed.preferences.targetRoles]))
+                : prev.preferences.targetRoles,
+          },
+        };
+        // Auto-save parsed profile
+        saveProfile(updated);
+        return updated;
+      });
+
+      const countSkills = parsed.skills?.length || 0;
+      const countProjects = parsed.projects?.length || 0;
+      const countExp = parsed.experience?.length || 0;
+      setResumeSuccessSummary(
+        `Extracted ${countSkills} skills, ${countProjects} projects, ${countExp} experiences, and contact details! Details have been saved to your profile.`
+      );
+    },
+    [profile]
+  );
 
   if (!loaded) {
     return (
@@ -148,14 +202,51 @@ export default function App() {
               <div>
                 <h2 className="text-xl font-semibold text-white mb-1">Upload Resume</h2>
                 <p className="text-sm text-gray-400">
-                  Upload your resume to get started. We'll extract the text — then verify and edit your details below.
+                  Upload your resume to get started. AI will automatically parse your contact info, education, skills, projects, and experience into your profile!
                 </p>
               </div>
-              <ResumeUploader onExtracted={handleResumeExtracted} />
+              <ResumeUploader onExtracted={handleResumeExtracted} successSummary={resumeSuccessSummary} />
+
+              {resumeSuccessSummary && (
+                <div className="glass-card p-5 border border-accent-green/30 bg-accent-green/5 space-y-3 animate-fade-in">
+                  <div className="flex items-center gap-2 text-accent-green font-medium">
+                    <CheckCircle2 className="w-5 h-5" />
+                    <span>Profile auto-populated & saved successfully!</span>
+                  </div>
+                  <p className="text-sm text-gray-300">{resumeSuccessSummary}</p>
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    <button
+                      onClick={() => setActiveTab('personal')}
+                      className="px-3 py-1.5 rounded-lg bg-surface-200 hover:bg-surface-300 text-xs font-medium text-white transition-colors"
+                    >
+                      Review Personal Info →
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('skills')}
+                      className="px-3 py-1.5 rounded-lg bg-surface-200 hover:bg-surface-300 text-xs font-medium text-white transition-colors"
+                    >
+                      Review Skills ({profile.skills.length}) →
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('projects')}
+                      className="px-3 py-1.5 rounded-lg bg-surface-200 hover:bg-surface-300 text-xs font-medium text-white transition-colors"
+                    >
+                      Review Projects ({profile.projects.length}) →
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('experience')}
+                      className="px-3 py-1.5 rounded-lg bg-surface-200 hover:bg-surface-300 text-xs font-medium text-white transition-colors"
+                    >
+                      Review Experience ({profile.experience.length}) →
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="glass-card p-5">
                 <p className="text-sm text-gray-400">
-                  💡 After uploading, navigate through the tabs above to fill in or verify each section of your profile.
-                  The more detail you provide, the better your AI-generated applications will be.
+                  💡 After uploading, verify each section using the tabs above.
+                  The more detail you provide, the higher your match score and the better your AI-generated screening answers will be.
                 </p>
               </div>
             </section>
