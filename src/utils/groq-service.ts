@@ -334,3 +334,101 @@ export async function testApiConnection(
     };
   }
 }
+
+// ─── AI Resume Parsing ──────────────────────────────────────
+export interface ParsedResumeData {
+  personal?: {
+    fullName?: string;
+    email?: string;
+    phone?: string;
+    portfolioUrl?: string;
+    githubUrl?: string;
+    linkedinUrl?: string;
+    location?: string;
+  };
+  education?: {
+    degree?: string;
+    institution?: string;
+    graduationYear?: number;
+    cgpaOrPercentage?: string;
+  };
+  skills?: string[];
+  projects?: Array<{
+    title: string;
+    techStack: string[];
+    description: string;
+    metricsOrImpact?: string;
+    repoUrl?: string;
+    liveUrl?: string;
+  }>;
+  experience?: Array<{
+    role: string;
+    company: string;
+    duration: string;
+    contributions: string;
+  }>;
+  preferences?: {
+    targetRoles?: string[];
+  };
+}
+
+export async function parseResumeWithAI(
+  resumeText: string,
+  apiKey: string,
+  model?: string
+): Promise<ParsedResumeData> {
+  const activeModel = resolveGroqModel(model);
+  const systemPrompt = `You are an expert AI resume parser. Your job is to extract candidate profile information from raw resume text into structured JSON.
+Return ONLY a valid JSON object strictly matching this schema:
+{
+  "personal": {
+    "fullName": "Full Name",
+    "email": "email@example.com",
+    "phone": "+91...",
+    "location": "City, Country",
+    "portfolioUrl": "https://...",
+    "githubUrl": "https://github.com/...",
+    "linkedinUrl": "https://linkedin.com/in/..."
+  },
+  "education": {
+    "degree": "Degree name",
+    "institution": "University / College Name",
+    "graduationYear": 2025,
+    "cgpaOrPercentage": "8.5 CGPA or 85%"
+  },
+  "skills": ["Skill 1", "Skill 2"],
+  "projects": [
+    {
+      "title": "Project Name",
+      "techStack": ["React", "Python"],
+      "description": "Short description of the project and what it does",
+      "metricsOrImpact": "Key impact, metric, or scale if mentioned",
+      "repoUrl": "https://...",
+      "liveUrl": "https://..."
+    }
+  ],
+  "experience": [
+    {
+      "role": "Title",
+      "company": "Company",
+      "duration": "June 2024 - Aug 2024",
+      "contributions": "Key responsibilities"
+    }
+  ],
+  "preferences": {
+    "targetRoles": ["Role 1"]
+  }
+}
+Rules:
+- Extract all skills into clean, individual strings in the "skills" array (e.g. ["React", "TypeScript", "Python"]).
+- If projects are mentioned, extract title, tech stack used, and accomplishments.
+- If internships/work experiences are mentioned, extract role, company, duration, contributions.
+- Do NOT invent or fabricate information not in the resume. Use empty values if not found.
+- Output ONLY valid JSON.`;
+
+  const userPrompt = `Extract structured profile information from this resume text:\n\n${resumeText.slice(0, 12000)}`;
+
+  const raw = await callGroq(apiKey, activeModel, systemPrompt, userPrompt, 0.1, true);
+  return extractJson<ParsedResumeData>(raw);
+}
+
