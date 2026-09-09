@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Key, Zap, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { testApiConnection } from '../../../src/utils/groq-service';
 
@@ -10,16 +10,22 @@ interface ApiKeyTesterProps {
 }
 
 const MODELS = [
-  { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (Recommended)' },
-  { value: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B (Fast & Accurate)' },
-  { value: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B (Fastest)' },
-  { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (Legacy)' },
-  { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant (Legacy)' },
+  { value: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (Recommended - High Quality)' },
+  { value: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B (Ultra Fast - 0.03s)' },
+  { value: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B (High Reasoning)' },
+  { value: 'groq/compound', label: 'Groq Compound (Agentic)' },
 ];
 
 export default function ApiKeyTester({ apiKey, model, onApiKeyChange, onModelChange }: ApiKeyTesterProps) {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
+
+  // Auto-migrate legacy/decommissioned models to the active default
+  useEffect(() => {
+    if (!model || model.includes('llama') || !MODELS.some((m) => m.value === model)) {
+      onModelChange('openai/gpt-oss-120b');
+    }
+  }, [model, onModelChange]);
 
   const handleTest = async () => {
     if (!apiKey.trim()) {

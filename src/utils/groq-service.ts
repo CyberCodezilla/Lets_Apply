@@ -72,6 +72,23 @@ function extractJson<T>(raw: string): T {
   throw new Error('Could not parse JSON from model output');
 }
 
+const DEPRECATED_MODELS = new Set([
+  'llama-3.3-70b-versatile',
+  'llama-3.1-70b-versatile',
+  'llama-3.1-8b-instant',
+  'llama3-70b-8192',
+  'llama3-8b-8192',
+  'mixtral-8x7b-32768',
+]);
+
+export function resolveGroqModel(model?: string): string {
+  const envDefault = (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b';
+  if (!model || DEPRECATED_MODELS.has(model) || model.includes('llama')) {
+    return envDefault;
+  }
+  return model;
+}
+
 async function callGroq(
   apiKey: string,
   model: string,
@@ -80,8 +97,9 @@ async function callGroq(
   temperature: number = DEFAULT_TEMPERATURE,
   jsonMode: boolean = false
 ): Promise<string> {
+  const activeModel = resolveGroqModel(model);
   const body: Record<string, unknown> = {
-    model,
+    model: activeModel,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
@@ -277,6 +295,7 @@ export async function testApiConnection(
   apiKey: string,
   model: string
 ): Promise<{ success: boolean; message: string; latencyMs?: number }> {
+  const activeModel = resolveGroqModel(model);
   const start = Date.now();
   try {
     const response = await fetch(GROQ_API_URL, {
@@ -286,7 +305,7 @@ export async function testApiConnection(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model,
+        model: activeModel,
         messages: [{ role: 'user', content: 'Say "OK" in one word.' }],
         max_tokens: 5,
         temperature: 0,

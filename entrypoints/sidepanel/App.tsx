@@ -56,8 +56,9 @@ export default function App() {
         if (!p.config.groqApiKey && apiKey) {
           p.config.groqApiKey = apiKey;
         }
-        if (!p.config.selectedModel && import.meta.env.WXT_GROQ_MODEL) {
-          p.config.selectedModel = import.meta.env.WXT_GROQ_MODEL as string;
+        // Auto-migrate legacy/decommissioned models
+        if (!p.config.selectedModel || p.config.selectedModel.includes('llama')) {
+          p.config.selectedModel = (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b';
         }
         setProfile(p);
         setPanelState('ready');

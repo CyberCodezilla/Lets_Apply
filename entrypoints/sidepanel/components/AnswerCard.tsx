@@ -18,13 +18,14 @@ export default function AnswerCard({
   questionText,
   inputType = 'textarea',
   options = [],
-  answer,
+  answer = '',
   onAnswerChange,
   onRegenerate,
   isRegenerating = false,
 }: AnswerCardProps) {
+  const safeAnswer = typeof answer === 'string' ? answer : '';
   const [isEditing, setIsEditing] = useState(false);
-  const wordCount = answer.split(/\s+/).filter(Boolean).length;
+  const wordCount = safeAnswer.split(/\s+/).filter(Boolean).length;
 
   return (
     <div className="glass-card p-4 space-y-3 animate-slide-up">
@@ -38,7 +39,7 @@ export default function AnswerCard({
       {inputType === 'radio' && options.length > 0 ? (
         <div className="space-y-2 pt-1">
           {options.map((opt, idx) => {
-            const isSelected = answer.trim().toLowerCase() === opt.trim().toLowerCase();
+            const isSelected = safeAnswer.trim().toLowerCase() === opt.trim().toLowerCase();
             return (
               <label
                 key={idx}
@@ -75,7 +76,7 @@ export default function AnswerCard({
       ) : inputType === 'select' && options.length > 0 ? (
         <div className="space-y-2">
           <select
-            value={answer}
+            value={safeAnswer}
             onChange={(e) => onAnswerChange(questionId, e.target.value)}
             className="la-input w-full cursor-pointer"
           >
@@ -100,7 +101,7 @@ export default function AnswerCard({
       ) : (
         <div className="relative">
           <textarea
-            value={answer}
+            value={safeAnswer}
             onChange={(e) => onAnswerChange(questionId, e.target.value)}
             onFocus={() => setIsEditing(true)}
             onBlur={() => setIsEditing(false)}
