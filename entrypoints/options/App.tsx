@@ -79,6 +79,18 @@ export default function App() {
               ? (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b'
               : stored.config.selectedModel,
         },
+        resumeMeta:
+          stored?.resumeMeta ||
+          (stored?.skills?.length || stored?.projects?.length
+            ? {
+                fileName: 'Uploaded_Resume.pdf',
+                fileSize: 1024 * 1024,
+                uploadedAt: 'Active Resume',
+                skillsCount: stored?.skills?.length || 0,
+                projectsCount: stored?.projects?.length || 0,
+                experienceCount: stored?.experience?.length || 0,
+              }
+            : undefined),
       };
 
       setProfile(merged);
@@ -180,7 +192,7 @@ export default function App() {
 
   // Handle resume text extraction & AI auto-population
   const handleResumeExtracted = useCallback(
-    async (text: string) => {
+    async (text: string, fileMeta: { name: string; size: number }) => {
       setResumeSuccessSummary(null);
 
       const apiKey = profile.config?.groqApiKey || (import.meta.env.WXT_GROQ_API_KEY as string);
@@ -190,7 +202,25 @@ export default function App() {
 
       const parsed = await parseResumeWithAI(text, apiKey, profile.config?.selectedModel);
 
-      // Deep merge with existing profile
+      const countSkills = parsed.skills?.length || 0;
+      const countProjects = parsed.projects?.length || 0;
+      const countExp = parsed.experience?.length || 0;
+
+      const now = new Date();
+      const formattedDate =
+        now.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        }) +
+        ' at ' +
+        now.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        });
+
+      // Replace profile fields with newly extracted resume data
       setProfile((prev) => {
         const updated: UserProfile = {
           ...prev,
@@ -209,27 +239,33 @@ export default function App() {
             graduationYear: Number(parsed.education?.graduationYear) || prev.education.graduationYear,
             cgpaOrPercentage: parsed.education?.cgpaOrPercentage || prev.education.cgpaOrPercentage,
           },
-          skills: Array.from(new Set([...(prev.skills || []), ...(parsed.skills || [])])),
+          skills: parsed.skills && parsed.skills.length > 0 ? parsed.skills : prev.skills,
           projects: parsed.projects && parsed.projects.length > 0 ? parsed.projects : prev.projects,
           experience: parsed.experience && parsed.experience.length > 0 ? parsed.experience : prev.experience,
           preferences: {
             ...prev.preferences,
             targetRoles:
               parsed.preferences?.targetRoles && parsed.preferences.targetRoles.length > 0
-                ? Array.from(new Set([...prev.preferences.targetRoles, ...parsed.preferences.targetRoles]))
+                ? parsed.preferences.targetRoles
                 : prev.preferences.targetRoles,
+          },
+          resumeMeta: {
+            fileName: fileMeta.name,
+            fileSize: fileMeta.size,
+            uploadedAt: formattedDate,
+            skillsCount: countSkills,
+            projectsCount: countProjects,
+            experienceCount: countExp,
           },
         };
         // Auto-save parsed profile
-        saveProfile(updated);
+        profileRef.current = updated;
+        saveProfile(updated).catch(console.error);
         return updated;
       });
 
-      const countSkills = parsed.skills?.length || 0;
-      const countProjects = parsed.projects?.length || 0;
-      const countExp = parsed.experience?.length || 0;
       setResumeSuccessSummary(
-        `Extracted ${countSkills} skills, ${countProjects} projects, ${countExp} experiences, and contact details! Details have been saved to your profile.`
+        `Extracted ${countSkills} skills, ${countProjects} projects, ${countExp} experiences, and contact details from ${fileMeta.name}! Profile has been updated with the new resume.`
       );
     },
     [profile]
@@ -329,7 +365,11 @@ export default function App() {
                   Upload your resume to get started. AI will automatically parse your contact info, education, skills, projects, and experience into your profile!
                 </p>
               </div>
-              <ResumeUploader onExtracted={handleResumeExtracted} successSummary={resumeSuccessSummary} />
+              <ResumeUploader
+                onExtracted={handleResumeExtracted}
+                successSummary={resumeSuccessSummary}
+                currentResumeMeta={profile.resumeMeta}
+              />
 
               {resumeSuccessSummary && (
                 <div className="glass-card p-5 border border-accent-green/30 bg-accent-green/5 space-y-3 animate-fade-in">
