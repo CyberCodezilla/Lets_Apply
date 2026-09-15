@@ -27,6 +27,16 @@ export interface UserProfile {
     groqApiKey: string;
     selectedModel: string;
   };
+  resumeMeta?: ResumeMeta;
+}
+
+export interface ResumeMeta {
+  fileName: string;
+  fileSize: number;
+  uploadedAt: string;
+  skillsCount?: number;
+  projectsCount?: number;
+  experienceCount?: number;
 }
 
 export interface ProjectEntry {
