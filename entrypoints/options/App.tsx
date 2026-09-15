@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   User, GraduationCap, Wrench, FolderGit2, Briefcase, Settings2, Target,
-  Save, CheckCircle2, Send, Sparkles
+  Save, CheckCircle2, Send, Sparkles, Loader2, Check, ExternalLink
 } from 'lucide-react';
 import type { UserProfile } from '../../src/types';
 import { DEFAULT_PROFILE } from '../../src/types';
@@ -33,46 +33,150 @@ export default function App() {
   const [resumeSuccessSummary, setResumeSuccessSummary] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  // Load profile from storage on mount
+  const profileRef = useRef<UserProfile>(DEFAULT_PROFILE);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isLoadedRef = useRef(false);
+
+  // Keep profileRef in sync with profile state
   useEffect(() => {
-    getProfile().then((stored) => {
-      if (stored) {
-        if (!stored.config?.groqApiKey && import.meta.env.WXT_GROQ_API_KEY) {
-          stored.config = {
-            ...stored.config,
-            groqApiKey: import.meta.env.WXT_GROQ_API_KEY as string,
-          };
-        }
-        if (!stored.config?.selectedModel || stored.config.selectedModel.includes('llama')) {
-          stored.config = {
-            ...(stored.config || {}),
-            selectedModel: (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b',
-          };
-        }
-        setProfile(stored);
+    profileRef.current = profile;
+  }, [profile]);
+
+  // Load profile from storage on mount with deep merge
+  useEffect(() => {
+    Promise.all([
+      getProfile(),
+      chrome.storage.local.get('last_active_options_tab'),
+    ]).then(([stored, tabResult]) => {
+      const merged: UserProfile = {
+        ...DEFAULT_PROFILE,
+        ...(stored || {}),
+        personal: {
+          ...DEFAULT_PROFILE.personal,
+          ...(stored?.personal || {}),
+        },
+        education: {
+          ...DEFAULT_PROFILE.education,
+          ...(stored?.education || {}),
+        },
+        skills: Array.isArray(stored?.skills) ? stored.skills : DEFAULT_PROFILE.skills,
+        projects: Array.isArray(stored?.projects) ? stored.projects : DEFAULT_PROFILE.projects,
+        experience: Array.isArray(stored?.experience) ? stored.experience : DEFAULT_PROFILE.experience,
+        preferences: {
+          ...DEFAULT_PROFILE.preferences,
+          ...(stored?.preferences || {}),
+          targetRoles: Array.isArray(stored?.preferences?.targetRoles)
+            ? stored.preferences.targetRoles
+            : DEFAULT_PROFILE.preferences.targetRoles,
+        },
+        config: {
+          ...DEFAULT_PROFILE.config,
+          ...(stored?.config || {}),
+          groqApiKey:
+            stored?.config?.groqApiKey || (import.meta.env.WXT_GROQ_API_KEY as string) || '',
+          selectedModel:
+            !stored?.config?.selectedModel || stored?.config?.selectedModel.includes('llama')
+              ? (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b'
+              : stored.config.selectedModel,
+        },
+      };
+
+      setProfile(merged);
+      profileRef.current = merged;
+
+      const savedTab = tabResult?.last_active_options_tab as TabId | undefined;
+      if (savedTab && TABS.some((t) => t.id === savedTab)) {
+        setActiveTab(savedTab);
       }
+
       setLoaded(true);
+      // Allow state to settle before enabling auto-save listener
+      setTimeout(() => {
+        isLoadedRef.current = true;
+      }, 50);
     });
   }, []);
 
-  // Update a nested field in profile
+  // Flush save on page close / blur / unload so inputs are never lost
+  useEffect(() => {
+    const flushSave = () => {
+      if (isLoadedRef.current) {
+        saveProfile(profileRef.current).catch(console.error);
+      }
+    };
+
+    window.addEventListener('beforeunload', flushSave);
+    window.addEventListener('pagehide', flushSave);
+    return () => {
+      window.removeEventListener('beforeunload', flushSave);
+      window.removeEventListener('pagehide', flushSave);
+    };
+  }, []);
+
+  // Auto-save whenever profile changes (debounced by 250ms)
+  useEffect(() => {
+    if (!isLoadedRef.current) return;
+
+    setSaveStatus('saving');
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await saveProfile(profileRef.current);
+        setSaveStatus('saved');
+        setTimeout(() => {
+          setSaveStatus((prev) => (prev === 'saved' ? 'idle' : prev));
+        }, 1500);
+      } catch (err) {
+        console.error('Auto-save error:', err);
+        setSaveStatus('idle');
+      }
+    }, 250);
+
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [profile]);
+
+  // Switch tab and immediately persist tab selection & flush pending saves
+  const handleTabChange = useCallback((tabId: TabId) => {
+    setActiveTab(tabId);
+    chrome.storage.local.set({ last_active_options_tab: tabId }).catch(console.error);
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveProfile(profileRef.current).catch(console.error);
+  }, []);
+
+  // Update a nested field in profile (triggers auto-save)
   const updateField = useCallback(
     <K extends keyof UserProfile>(section: K, field: string, value: unknown) => {
-      setProfile((prev) => ({
-        ...prev,
-        [section]: { ...(prev[section] as Record<string, unknown>), [field]: value },
-      }));
+      setProfile((prev) => {
+        const next = {
+          ...prev,
+          [section]: { ...(prev[section] as Record<string, unknown>), [field]: value },
+        };
+        profileRef.current = next;
+        return next;
+      });
     },
     []
   );
 
-  // Save profile to storage
+  // Manual save profile to storage
   const handleSave = useCallback(async () => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
     setSaveStatus('saving');
-    await saveProfile(profile);
+    await saveProfile(profileRef.current);
     setSaveStatus('saved');
     setTimeout(() => setSaveStatus('idle'), 2000);
-  }, [profile]);
+  }, []);
 
   // Handle resume text extraction & AI auto-population
   const handleResumeExtracted = useCallback(
