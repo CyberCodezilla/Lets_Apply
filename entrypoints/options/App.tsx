@@ -527,9 +527,12 @@ export default function App() {
                     <label className="la-label">Graduation Year</label>
                     <input
                       type="number"
-                      value={profile.education.graduationYear}
-                      onChange={(e) => updateField('education', 'graduationYear', parseInt(e.target.value) || 0)}
-                      placeholder="2025"
+                      value={profile.education.graduationYear || ''}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/^0+(?=\d)/, '');
+                        updateField('education', 'graduationYear', val === '' ? 0 : parseInt(val, 10) || 0);
+                      }}
+                      placeholder="e.g. 2025"
                       className="la-input"
                     />
                   </div>
@@ -610,9 +613,12 @@ export default function App() {
                     <label className="la-label">Minimum Stipend (₹/month)</label>
                     <input
                       type="number"
-                      value={profile.preferences.minStipend}
-                      onChange={(e) => updateField('preferences', 'minStipend', parseInt(e.target.value) || 0)}
-                      placeholder="5000"
+                      value={profile.preferences.minStipend || ''}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/^0+(?=\d)/, '');
+                        updateField('preferences', 'minStipend', val === '' ? 0 : parseInt(val, 10) || 0);
+                      }}
+                      placeholder="0 (e.g. 15000)"
                       className="la-input"
                     />
                   </div>
