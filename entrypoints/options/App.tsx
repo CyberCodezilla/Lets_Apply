@@ -527,10 +527,18 @@ export default function App() {
                     <label className="la-label">Graduation Year</label>
                     <input
                       type="number"
+                      min="1900"
+                      max="2100"
                       value={profile.education.graduationYear || ''}
+                      onKeyDown={(e) => {
+                        if (['-', '+', 'e', 'E', '.'].includes(e.key)) {
+                          e.preventDefault();
+                        }
+                      }}
                       onChange={(e) => {
-                        const val = e.target.value.replace(/^0+(?=\d)/, '');
-                        updateField('education', 'graduationYear', val === '' ? 0 : parseInt(val, 10) || 0);
+                        const digitsOnly = e.target.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+                        const trimmed = digitsOnly.slice(0, 4);
+                        updateField('education', 'graduationYear', trimmed === '' ? 0 : parseInt(trimmed, 10) || 0);
                       }}
                       placeholder="e.g. 2025"
                       className="la-input"
@@ -613,10 +621,16 @@ export default function App() {
                     <label className="la-label">Minimum Stipend (₹/month)</label>
                     <input
                       type="number"
+                      min="0"
                       value={profile.preferences.minStipend || ''}
+                      onKeyDown={(e) => {
+                        if (['-', '+', 'e', 'E', '.'].includes(e.key)) {
+                          e.preventDefault();
+                        }
+                      }}
                       onChange={(e) => {
-                        const val = e.target.value.replace(/^0+(?=\d)/, '');
-                        updateField('preferences', 'minStipend', val === '' ? 0 : parseInt(val, 10) || 0);
+                        const digitsOnly = e.target.value.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+                        updateField('preferences', 'minStipend', digitsOnly === '' ? 0 : parseInt(digitsOnly, 10) || 0);
                       }}
                       placeholder="0 (e.g. 15000)"
                       className="la-input"
