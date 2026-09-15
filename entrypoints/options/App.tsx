@@ -257,28 +257,48 @@ export default function App() {
               <p className="text-xs text-gray-500">Profile Setup & Settings</p>
             </div>
           </div>
-          <button
-            onClick={handleSave}
-            disabled={saveStatus === 'saving'}
-            className="la-btn flex items-center gap-2"
-          >
-            {saveStatus === 'saved' ? (
-              <>
-                <CheckCircle2 className="w-4 h-4" />
-                Saved!
-              </>
-            ) : saveStatus === 'saving' ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Saving...
-              </>
-            ) : (
-              <>
-                <Save className="w-4 h-4" />
-                Save Profile
-              </>
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Auto-save status indicator */}
+            {saveStatus === 'saving' && (
+              <span className="text-xs text-la-400 flex items-center gap-1.5 bg-la-600/10 px-2.5 py-1.5 rounded-xl border border-la-500/20 animate-pulse">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-la-400" />
+                <span className="hidden xs:inline">Auto-saving...</span>
+              </span>
             )}
-          </button>
+            {saveStatus === 'saved' && (
+              <span className="text-xs text-accent-green flex items-center gap-1.5 bg-accent-green/10 px-2.5 py-1.5 rounded-xl border border-accent-green/20 animate-fade-in">
+                <CheckCircle2 className="w-3.5 h-3.5 text-accent-green" />
+                <span className="hidden xs:inline">Auto-saved</span>
+              </span>
+            )}
+            {saveStatus === 'idle' && (
+              <span className="text-xs text-gray-400 items-center gap-1.5 bg-surface-100/60 px-2.5 py-1.5 rounded-xl border border-surface-300/30 hidden sm:flex">
+                <Check className="w-3.5 h-3.5 text-accent-green" />
+                <span>Auto-save on</span>
+              </span>
+            )}
+
+            {/* Open in full tab button */}
+            <button
+              type="button"
+              onClick={() => window.open(chrome.runtime.getURL('/options.html'), '_blank')}
+              title="Open settings in a full browser tab"
+              className="p-2.5 rounded-xl bg-surface-200 hover:bg-surface-300 text-gray-400 hover:text-white transition-all flex items-center gap-1 text-xs"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span className="hidden md:inline">Full Tab</span>
+            </button>
+
+            {/* Manual Save Profile button */}
+            <button
+              onClick={handleSave}
+              disabled={saveStatus === 'saving'}
+              className="la-btn flex items-center gap-2 text-sm px-4 py-2"
+            >
+              <Save className="w-4 h-4" />
+              <span className="hidden sm:inline">Save Profile</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -288,7 +308,7 @@ export default function App() {
           {TABS.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={`la-tab flex items-center gap-2 ${
                 activeTab === tab.id ? 'la-tab-active' : ''
               }`}
