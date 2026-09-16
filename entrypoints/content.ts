@@ -1,10 +1,22 @@
-import type { JobContext, ScreeningQuestion, FillFormPayload, ScrapeResultPayload, FillResultPayload } from '@/src/types';
+import type {
+  JobContext,
+  ScreeningQuestion,
+  FillFormPayload,
+  ScrapeResultPayload,
+  FillResultPayload,
+  NotifyMatchPayload,
+} from '@/src/types';
+import { getProfile, getNotifiedJobIds, markJobAsNotified } from '@/src/utils/storage';
+import { evaluateJobMatch, type CardJobData } from '@/src/utils/matcher';
 
 export default defineContentScript({
   matches: ['*://*.internshala.com/*'],
   runAt: 'document_idle',
 
   main() {
+    // Initialize background job scanner on Internshala listing pages
+    initListingScanner();
+
     // Listen for messages from side panel / background
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.type === 'SCRAPE_PAGE') {
@@ -710,4 +722,179 @@ async function fillForm(payload: FillFormPayload): Promise<FillResultPayload> {
 // ─── Helpers ────────────────────────────────────────────────
 function cleanText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+// ─── Real-Time Listing Scanner ──────────────────────────────
+function initListingScanner() {
+  let debounceTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const triggerScan = () => {
+    if (debounceTimeout) clearTimeout(debounceTimeout);
+    debounceTimeout = setTimeout(() => {
+      scanListingCards().catch(console.error);
+    }, 400);
+  };
+
+  // Run on initial load
+  triggerScan();
+
+  // Watch for dynamic card loading (infinite scroll / filters)
+  const observer = new MutationObserver((mutations) => {
+    const hasAddedNodes = mutations.some((m) => m.addedNodes.length > 0);
+    if (hasAddedNodes) {
+      triggerScan();
+    }
+  });
+
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  } else {
+    window.addEventListener('DOMContentLoaded', () => {
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+}
+
+async function scanListingCards(): Promise<void> {
+  // Only scan if on internships or jobs listing/search pages
+  const path = window.location.pathname.toLowerCase();
+  if (!path.includes('/internship') && !path.includes('/job')) {
+    return;
+  }
+
+  const profile = await getProfile();
+  if (!profile || !profile.skills || profile.skills.length === 0) {
+    return;
+  }
+
+  const notificationsEnabled = profile.preferences?.notificationsEnabled ?? true;
+  const threshold = profile.preferences?.minMatchNotificationThreshold || 80;
+  const notifiedIds = await getNotifiedJobIds();
+
+  const cards = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '.individual_internship, .internship_meta, .container-fluid.individual_internship'
+    )
+  );
+
+  for (const card of cards) {
+    if (card.getAttribute('data-lets-apply-scanned') === 'true') continue;
+    card.setAttribute('data-lets-apply-scanned', 'true');
+
+    // Extract title & link
+    const titleAnchor = card.querySelector<HTMLAnchorElement>(
+      '.heading_4_5 a, .job-internship-name a, .profile a, a[href*="/internship/detail/"], a[href*="/job/detail/"]'
+    );
+    const title = titleAnchor?.textContent?.trim() || '';
+    const url = titleAnchor?.href || '';
+    if (!title || !url) continue;
+
+    // Company
+    const company =
+      card.querySelector('.company_name, .company-name, .link_display_like_text')?.textContent?.trim() || 'Company';
+
+    // Stable Job ID
+    const dataId = card.getAttribute('data-internship-id') || card.getAttribute('internship_id') || card.id;
+    const urlMatch = url.match(/\/detail\/([^/?#]+)/);
+    const jobId = dataId || (urlMatch && urlMatch[1] ? urlMatch[1] : `${title}_${company}`);
+
+    // Location
+    const location =
+      card.querySelector('.location_link, [class*="location"]')?.textContent?.trim() || 'Work from home';
+
+    // Stipend
+    const stipend =
+      card.querySelector('.stipend, [class*="stipend"]')?.textContent?.trim() || 'Stipend available';
+
+    // Duration
+    const duration =
+      card.querySelector('[class*="duration"]')?.textContent?.trim() || '';
+
+    // Skills
+    const skillEls = Array.from(card.querySelectorAll('.round_tabs, .skill_tag, .tags_container span'));
+    const skills = skillEls.map((s) => s.textContent?.trim() || '').filter(Boolean);
+
+    const cardJobData: CardJobData = {
+      jobId,
+      title,
+      company,
+      location,
+      stipend,
+      duration,
+      url,
+      skills,
+    };
+
+    const matchResult = evaluateJobMatch(profile, cardJobData);
+
+    // Inject Match Badge onto Card if score >= 60
+    if (matchResult.score >= 60) {
+      injectCardBadge(card, matchResult.score, matchResult.rationale, url);
+    }
+
+    // Trigger Notification if score >= threshold and not yet notified
+    if (matchResult.score >= threshold && notificationsEnabled && !notifiedIds.includes(jobId)) {
+      await markJobAsNotified(jobId);
+
+      const notifPayload: NotifyMatchPayload = {
+        jobId,
+        title,
+        company,
+        location,
+        stipend,
+        url,
+        matchScore: matchResult.score,
+        rationale: matchResult.rationale,
+      };
+
+      chrome.runtime.sendMessage({
+        type: 'NOTIFY_MATCH',
+        payload: notifPayload,
+      }).catch(console.error);
+    }
+  }
+}
+
+function injectCardBadge(card: HTMLElement, score: number, rationale: string[], url: string) {
+  if (card.querySelector('.lets-apply-card-badge')) return;
+
+  const headerContainer =
+    card.querySelector('.internship_heading_container, .heading_4_5, .individual_internship_header') || card;
+
+  const badge = document.createElement('div');
+  badge.className = 'lets-apply-card-badge';
+  badge.style.cssText = `
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+    border-radius: 9999px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    ${
+      score >= 80
+        ? 'background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(76, 110, 245, 0.15)); border: 1px solid rgba(34, 197, 94, 0.4); color: #16a34a;'
+        : 'background: rgba(234, 179, 8, 0.12); border: 1px solid rgba(234, 179, 8, 0.35); color: #ca8a04;'
+    }
+  `;
+
+  const reasonText = rationale[0] ? ` • ${rationale[0]}` : '';
+  badge.title = `Click to view internship with Let's Apply AI\nWhy you match: ${rationale.join(' • ')}`;
+  badge.innerHTML = `
+    <span style="font-size: 13px;">✨</span>
+    <span><strong>${score}% Match</strong>${reasonText.slice(0, 45)}${reasonText.length > 45 ? '...' : ''}</span>
+    <span style="margin-left: 4px; padding: 2px 6px; background: rgba(0,0,0,0.06); border-radius: 4px; font-size: 10px;">Apply ↗</span>
+  `;
+
+  badge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    window.open(url, '_blank');
+  });
+
+  headerContainer.appendChild(badge);
 }
