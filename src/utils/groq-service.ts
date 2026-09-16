@@ -114,7 +114,8 @@ async function callGroq(
   systemPrompt: string,
   userPrompt: string,
   temperature: number = DEFAULT_TEMPERATURE,
-  jsonMode: boolean = false
+  jsonMode: boolean = false,
+  maxTokens?: number
 ): Promise<string> {
   const activeModel = resolveGroqModel(model);
   const body: Record<string, unknown> = {
@@ -124,7 +125,7 @@ async function callGroq(
       { role: 'user', content: userPrompt },
     ],
     temperature,
-    max_tokens: DEFAULT_MAX_TOKENS,
+    max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
   };
 
   if (jsonMode) {
@@ -604,10 +605,18 @@ Return ONLY a valid JSON object strictly matching this schema:
   "skills": ["React", "TypeScript", "Node.js", "Python"],
   "projects": [
     {
-      "title": "Project Name",
-      "techStack": ["React", "Python", "Tailwind CSS"],
+      "title": "Project 1 Title",
+      "techStack": ["React", "TypeScript", "Fastify"],
       "description": "Clear description of the problem solved, architecture, and features.",
-      "metricsOrImpact": "Reduced latency by 40%, 10K+ monthly active users, or measurable metric.",
+      "metricsOrImpact": "Reduced latency by 40%, 22+ PII types blocked, or measurable metric.",
+      "repoUrl": "https://github.com/...",
+      "liveUrl": "https://..."
+    },
+    {
+      "title": "Project 2 Title",
+      "techStack": ["Python", "PyQt", "OpenCASCADE"],
+      "description": "Clear description of the second project.",
+      "metricsOrImpact": "100% pass rate on 59-test suite.",
       "repoUrl": "https://github.com/...",
       "liveUrl": "https://..."
     }
@@ -621,22 +630,29 @@ Return ONLY a valid JSON object strictly matching this schema:
     }
   ],
   "preferences": {
-    "targetRoles": ["Frontend Developer", "Full Stack Developer"]
+    "targetRoles": ["Frontend Developer", "Full Stack Developer", "Software Engineer"]
   }
 }
 
-EXTRACTION RULES:
-1. SKILLS: Extract individual, atomic technical and domain skills into clean strings in the "skills" array. Un-nest categories (e.g. if the resume says "Languages: C++, Python; Tools: Git, Docker", produce ["C++", "Python", "Git", "Docker"]).
-2. PROJECTS: Extract each project's title, tech stack used as an array of strings, detailed description, and any quantifiable metrics (users, speedup, accuracy, stars, cost reduction) into "metricsOrImpact".
-3. EXPERIENCE: Extract full role title, company name, start & end dates (or duration), and bulleted contributions with metrics into "contributions".
-4. EDUCATION: Extract degree name, college/university, 4-digit graduation year (number), and CGPA or percentage if present.
-5. LINKS: If GitHub, LinkedIn, or portfolio usernames/URLs are present, extract them into full URLs with https://.
-6. TARGET ROLES: Infer 2-4 appropriate internship/job roles the candidate is best suited for based on their skills and projects (e.g. ["Full Stack Developer", "Backend Engineer"]).
-7. ZERO HALLUCINATION: Do NOT fabricate details, metrics, or experiences not in the resume. Leave empty or omit if not found. Output strictly valid JSON.`;
+CRITICAL EXTRACTION MANDATES:
+1. EXTRACT ALL PROJECTS: You MUST extract EVERY SINGLE PROJECT mentioned in the resume. If the resume contains 2, 3, 4, 5, or more projects, extract EVERY ONE of them as individual, distinct objects in the "projects" array. NEVER stop after the first project, and NEVER omit or merge projects.
+2. PROJECT DETAILS: For every project, extract:
+   - "title": exact project title.
+   - "techStack": array of technologies/frameworks used.
+   - "description": synthesize the problem solved, architectural approach, and key technical implementations.
+   - "metricsOrImpact": extract specific quantifiable metrics (e.g. latency numbers, % improvements, accuracy, test pass rates, scale, PII types handled).
+   - "repoUrl" / "liveUrl": extract URLs if present, or omit if not found.
+3. SKILLS: Extract individual, atomic technical and domain skills into clean strings in the "skills" array. Un-nest categories (e.g. if the resume says "Languages: C++, Python; Tools: Git, Docker", produce ["C++", "Python", "Git", "Docker"]). Extract ALL skills listed across Languages, Frameworks, Tools, and Databases.
+4. EXPERIENCE: Extract full role title, company name, start & end dates (or duration), and bulleted contributions with metrics into "contributions". If no formal company employment is listed, return [].
+5. EDUCATION: Extract degree name, college/university, 4-digit graduation year (number), and CGPA or percentage if present.
+6. LINKS: If GitHub, LinkedIn, or portfolio usernames/URLs are present, extract them into full URLs with https://.
+7. TARGET ROLES: Infer 2-4 appropriate internship/job roles the candidate is best suited for based on their skills and projects (e.g. ["Full Stack Developer", "Backend Engineer", "Software Engineer"]).
+8. ZERO HALLUCINATION: Do NOT fabricate details, metrics, or experiences not in the resume. Leave empty or omit if not found. Output strictly valid JSON.`;
 
-  const userPrompt = `Extract structured profile information from this resume text:\n\n${resumeText.slice(0, 28000)}`;
+  const userPrompt = `Extract structured profile information from this resume text. Ensure ALL projects and skills are completely extracted:\n\n${resumeText.slice(0, 28000)}`;
 
-  const raw = await callGroq(apiKey, activeModel, systemPrompt, userPrompt, 0.1, true);
+  // Pass 8000 maxTokens so that reasoning models (gpt-oss-120b) have ample room for both CoT tokens and the full JSON of all 4+ projects
+  const raw = await callGroq(apiKey, activeModel, systemPrompt, userPrompt, 0.1, true, 8000);
   const parsed = extractJson<unknown>(raw);
   return normalizeParsedResumeData(parsed);
 }
