@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import {
   Send, Settings, AlertTriangle, Globe, Loader2, CheckCircle2,
-  Sparkles, Building2, MapPin, Clock, BanknoteIcon
+  Sparkles, Building2, MapPin, Clock, BanknoteIcon, ShieldCheck
 } from 'lucide-react';
 import type { UserProfile, JobContext, ScrapeResultPayload, FillResultPayload } from '../../src/types';
 import { getProfile } from '../../src/utils/storage';
@@ -10,6 +10,7 @@ import { computeMatchScore, generateAnswers, regenerateAnswer } from '../../src/
 import MatchScoreBadge from './components/MatchScoreBadge';
 import AnswerCard from './components/AnswerCard';
 import ActionFooter from './components/ActionFooter';
+import TransparencyModal from './components/TransparencyModal';
 
 type PanelState = 'loading-profile' | 'no-profile' | 'not-internshala' | 'ready' | 'analyzing' | 'review' | 'success' | 'error';
 
@@ -45,6 +46,7 @@ export default function App() {
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [isFillingForm, setIsFillingForm] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [showTransparencyModal, setShowTransparencyModal] = useState(false);
 
   // Load profile on mount
   useEffect(() => {
@@ -211,13 +213,22 @@ export default function App() {
           </div>
           <span className="text-base font-bold text-white">Let's Apply</span>
         </div>
-        <button
-          onClick={openOptions}
-          className="p-2 rounded-lg hover:bg-surface-300/40 text-gray-400 hover:text-white transition-all"
-          title="Settings"
-        >
-          <Settings className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setShowTransparencyModal(true)}
+            className="p-2 rounded-lg hover:bg-surface-300/40 text-la-400 hover:text-white transition-all flex items-center gap-1"
+            title="How Matching & Notifier Works (Transparency)"
+          >
+            <ShieldCheck className="w-4 h-4" />
+          </button>
+          <button
+            onClick={openOptions}
+            className="p-2 rounded-lg hover:bg-surface-300/40 text-gray-400 hover:text-white transition-all"
+            title="Settings"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* ── Loading Profile ── */}
@@ -449,6 +460,14 @@ export default function App() {
           </button>
         </div>
       )}
+
+      {/* ── Transparency & How It Works Modal ── */}
+      <TransparencyModal
+        isOpen={showTransparencyModal}
+        onClose={() => setShowTransparencyModal(false)}
+        profile={profile}
+        onProfileUpdated={(p) => setProfile(p)}
+      />
     </div>
   );
 }

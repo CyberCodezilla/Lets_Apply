@@ -8,7 +8,7 @@ export default defineConfig({
     version: '1.0.0',
     description:
       'AI agent to evaluate, draft, and auto-fill Internshala internship applications with zero hallucinations.',
-    permissions: ['storage', 'sidePanel', 'activeTab', 'scripting'],
+    permissions: ['storage', 'sidePanel', 'activeTab', 'scripting', 'notifications', 'alarms'],
     host_permissions: ['*://*.internshala.com/*', 'https://api.groq.com/*'],
     action: {
       default_title: "Open Let's Apply Panel",

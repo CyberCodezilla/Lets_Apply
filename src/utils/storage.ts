@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
   PROFILE: 'user_profile',
   JOB_CONTEXT: 'current_job_context',
   HISTORY: 'applied_history',
+  NOTIFIED_JOBS: 'notified_jobs',
 } as const;
 
 // ─── Profile ────────────────────────────────────────────────
@@ -44,4 +45,23 @@ export async function addToHistory(record: ApplicationRecord): Promise<void> {
 
 export async function clearHistory(): Promise<void> {
   await chrome.storage.local.remove(STORAGE_KEYS.HISTORY);
+}
+
+// ─── Notified Jobs (Deduplication) ──────────────────────────
+export async function getNotifiedJobIds(): Promise<string[]> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.NOTIFIED_JOBS);
+  return (result[STORAGE_KEYS.NOTIFIED_JOBS] as string[]) ?? [];
+}
+
+export async function markJobAsNotified(jobId: string): Promise<void> {
+  const list = await getNotifiedJobIds();
+  if (!list.includes(jobId)) {
+    list.unshift(jobId);
+    if (list.length > 500) list.length = 500; // retain last 500 notified jobs
+    await chrome.storage.local.set({ [STORAGE_KEYS.NOTIFIED_JOBS]: list });
+  }
+}
+
+export async function clearNotifiedJobs(): Promise<void> {
+  await chrome.storage.local.remove(STORAGE_KEYS.NOTIFIED_JOBS);
 }
