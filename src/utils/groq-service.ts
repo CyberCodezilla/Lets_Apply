@@ -1,32 +1,51 @@
 import type { UserProfile, JobContext, MatchResult, ScreeningQuestion } from '../types';
 
-const GROQ_BASE_URL = (import.meta.env.WXT_GROQ_BASE_URL as string) || 'https://api.groq.com/openai/v1';
+const GROQ_BASE_URL = (import.meta.env?.WXT_GROQ_BASE_URL as string) || 'https://api.groq.com/openai/v1';
 const GROQ_API_URL = `${GROQ_BASE_URL.replace(/\/+$/, '')}/chat/completions`;
-const DEFAULT_MAX_TOKENS = Number(import.meta.env.WXT_AI_MAX_TOKENS) || 2048;
-const MAX_WORDS = Number(import.meta.env.WXT_MAX_ANSWER_WORDS) || 120;
-const DEFAULT_TEMPERATURE = Number(import.meta.env.WXT_AI_TEMPERATURE) || 0.3;
+const DEFAULT_MAX_TOKENS = Number(import.meta.env?.WXT_AI_MAX_TOKENS) || 2048;
+const MAX_WORDS = Number(import.meta.env?.WXT_MAX_ANSWER_WORDS) || 120;
+const DEFAULT_TEMPERATURE = Number(import.meta.env?.WXT_AI_TEMPERATURE) || 0.3;
 
 function buildSystemPrompt(profile: UserProfile): string {
-  // Omit API key from the profile data sent in prompts
   const safeProfile = {
-    personal: profile.personal,
+    personal: {
+      fullName: profile.personal.fullName,
+      location: profile.personal.location,
+      portfolioUrl: profile.personal.portfolioUrl,
+      githubUrl: profile.personal.githubUrl,
+      linkedinUrl: profile.personal.linkedinUrl,
+    },
     education: profile.education,
     skills: profile.skills,
-    projects: profile.projects,
-    experience: profile.experience,
+    projects: profile.projects.map((p) => ({
+      title: p.title,
+      techStack: p.techStack,
+      description: p.description,
+      metricsOrImpact: p.metricsOrImpact || 'N/A',
+      repoUrl: p.repoUrl,
+      liveUrl: p.liveUrl,
+    })),
+    experience: profile.experience.map((e) => ({
+      role: e.role,
+      company: e.company,
+      duration: e.duration,
+      contributions: e.contributions,
+    })),
     preferences: profile.preferences,
   };
 
-  return `You are Let's Apply, a high-precision career assistant. Your job is to answer internship application questions for the candidate based STRICTLY on their verified profile.
+  return `You are Let's Apply, an elite career agent assisting an internship candidate on Internshala.
+Your mission is to generate high-conversion, professional, and completely hallucination-free application answers based STRICTLY on the candidate's verified profile.
 
-GROUND RULES:
-1. Use ONLY the skills, projects, metrics, and experiences provided in the Candidate Profile.
-2. NEVER fabricate, exaggerate, or assume any experience, company, tool, or metric not explicitly listed.
-3. If the candidate profile does not possess a requested skill, answer honestly by highlighting the closest related verified skill and eagerness to learn.
-4. Keep all responses concise, punchy, and under ${MAX_WORDS} words per question.
-5. Avoid generic boilerplate (e.g., "I am a hard-working student"). Lead with direct project names and technical outcomes.
+CORE GROUND RULES:
+1. STRICT GROUNDING: Use ONLY the candidate's verified skills, projects, metrics, education, and experience below. NEVER invent, assume, or extrapolate technologies, company names, tools, or metrics not explicitly listed.
+2. TAILORED RELEVANCE: When answering, connect the candidate's most relevant verified project and metrics directly to the job requirements.
+3. CONCISENESS: Keep answers punchy, natural, and under ${MAX_WORDS} words per question. Avoid fluff or generic openings like "I am a passionate student". Lead directly with project achievements and technical outcomes.
+4. HONESTY: If a specific niche skill is missing from the profile, highlight the closest verified skill they have mastered and their demonstrated rapid learning ability.
+5. URLS & LINKS: If a question asks for a GitHub link, portfolio, LinkedIn, or personal website, output the candidate's exact URL from their profile.
+6. AVAILABILITY & LOGISTICS: If asked about joining immediately, duration, or work mode, provide a clear, professional affirmative response aligning with their profile and graduation timeline.
 
-CANDIDATE PROFILE:
+CANDIDATE VERIFIED PROFILE:
 ${JSON.stringify(safeProfile, null, 2)}`;
 }
 
@@ -82,7 +101,7 @@ const DEPRECATED_MODELS = new Set([
 ]);
 
 export function resolveGroqModel(model?: string): string {
-  const envDefault = (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b';
+  const envDefault = (import.meta.env?.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b';
   if (!model || DEPRECATED_MODELS.has(model) || model.includes('llama')) {
     return envDefault;
   }
@@ -139,7 +158,7 @@ export async function computeMatchScore(
   jobContext: JobContext
 ): Promise<MatchResult> {
   // Fast cache check: avoids duplicate LLM network latency if analyzing the same job posting
-  const cacheKey = `${jobContext.title}::${jobContext.company}::${jobContext.requirements.join(',')}::${profile.skills.join(',')}`;
+  const cacheKey = `${jobContext.title}::${jobContext.company}::${jobContext.requirements.join(',')}::${profile.skills.join(',')}::${profile.projects.map((p) => p.title).join(',')}::${profile.experience.length}`;
   const cached = matchScoreCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
     return cached.result;
@@ -165,11 +184,11 @@ Location: ${jobContext.location}
 Duration: ${jobContext.duration}
 Stipend: ${jobContext.stipend}
 
-Description:
-${jobContext.description}
-
-Requirements:
+Required Skills:
 ${jobContext.requirements.join(', ') || 'None specified'}
+
+Description:
+${jobContext.description.slice(0, 2000)}
 
 Candidate's target roles: ${profile.preferences.targetRoles.join(', ') || 'Any'}
 Candidate's preferred work mode: ${profile.preferences.workMode}
@@ -218,21 +237,38 @@ export async function generateAnswers(
   const systemPrompt = buildSystemPrompt(profile);
 
   const questionsBlock = questions
-    .map((q, i) => `Q${i + 1} (id: "${q.id}"): ${q.questionText}`)
-    .join('\n');
+    .map((q, i) => {
+      const typeStr = q.inputType || 'textarea';
+      const optionsStr = q.options && q.options.length > 0 ? `\nAvailable options: ${JSON.stringify(q.options)}` : '';
+      return `Q${i + 1} (id: "${q.id}", type: "${typeStr}"):\nQuestion: "${q.questionText}"${optionsStr}`;
+    })
+    .join('\n\n');
 
-  const userPrompt = `Answer these screening questions for the internship at ${jobContext.company} (${jobContext.title}).
-Each answer should be specific, metric-backed when possible, and under ${MAX_WORDS} words. Lead with project names and technical outcomes.
-
-Return a JSON object mapping question IDs to answers (no markdown, no extra text):
-{"<question_id>": "<answer>", ...}
+  const userPrompt = `Answer these screening questions for the internship application at ${jobContext.company} (${jobContext.title}).
 
 JOB CONTEXT:
-${jobContext.title} at ${jobContext.company}
-Description: ${jobContext.description.slice(0, 500)}
+Title: ${jobContext.title}
+Company: ${jobContext.company}
+Location: ${jobContext.location || 'Not specified'}
+Duration: ${jobContext.duration || 'Not specified'}
+Stipend: ${jobContext.stipend || 'Not specified'}
+Required Skills: ${jobContext.requirements.join(', ') || 'None specified'}
 
-QUESTIONS:
-${questionsBlock}`;
+Job Description Summary:
+${jobContext.description.slice(0, 2500)}
+
+SPECIAL INSTRUCTIONS PER QUESTION TYPE:
+- COVER LETTER / "Why should you be hired": Write a high-converting, tailored response (100–140 words) that leads with the candidate's top 1-2 verified projects matching the job's required skills, citing exact metrics and outcomes, and showing clear interest in ${jobContext.company}.
+- RADIO / SELECT / MULTIPLE CHOICE: Your answer MUST be an EXACT MATCH to one of the provided "Available options". Do NOT add extra words or explanation.
+- REPOSITORY / PORTFOLIO / URL QUESTIONS: Provide the exact URL directly from the candidate's profile.
+- AVAILABILITY QUESTIONS: State clearly that the candidate is available for ${jobContext.duration || 'the internship'} and work mode.
+- OTHER QUESTIONS: Answer directly, metric-backed when possible, and strictly under ${MAX_WORDS} words.
+
+QUESTIONS TO ANSWER:
+${questionsBlock}
+
+Return a JSON object mapping question IDs to the drafted answer string (no extra markdown):
+{"<question_id>": "<answer>", ...}`;
 
   const raw = await callGroq(
     profile.config.groqApiKey,
@@ -267,17 +303,33 @@ export async function regenerateAnswer(
   question: ScreeningQuestion
 ): Promise<string> {
   const systemPrompt = buildSystemPrompt(profile);
+  const typeStr = question.inputType || 'textarea';
+  const optionsStr =
+    question.options && question.options.length > 0
+      ? `\nAvailable options: ${JSON.stringify(question.options)}`
+      : '';
 
-  const userPrompt = `Answer this screening question for the internship at ${jobContext.company} (${jobContext.title}).
-The answer should be specific, metric-backed when possible, and under ${MAX_WORDS} words. Lead with project names and technical outcomes.
-
-Return ONLY the answer text, no JSON, no quotes, no markdown.
+  const userPrompt = `Answer this single screening question for the internship application at ${jobContext.company} (${jobContext.title}).
 
 JOB CONTEXT:
-${jobContext.title} at ${jobContext.company}
-Description: ${jobContext.description.slice(0, 500)}
+Title: ${jobContext.title}
+Company: ${jobContext.company}
+Location: ${jobContext.location || 'Not specified'}
+Duration: ${jobContext.duration || 'Not specified'}
+Stipend: ${jobContext.stipend || 'Not specified'}
+Required Skills: ${jobContext.requirements.join(', ') || 'None specified'}
 
-QUESTION: ${question.questionText}`;
+Job Description Summary:
+${jobContext.description.slice(0, 2000)}
+
+QUESTION [id: "${question.id}", type: "${typeStr}"]:
+"${question.questionText}"${optionsStr}
+
+SPECIAL RULES:
+- If this is a radio or select question, return ONLY the exact chosen option string from the available options list.
+- If this is a cover letter / "Why should you be hired" question, highlight the candidate's top matching verified projects with metrics, under 140 words.
+- If asking for a link/URL, return the exact URL from candidate profile.
+- Return ONLY the drafted answer text, no JSON, no quotes, no markdown fences.`;
 
   const raw = await callGroq(
     profile.config.groqApiKey,
@@ -372,13 +424,166 @@ export interface ParsedResumeData {
   };
 }
 
+/**
+ * Defensively cleans, type-checks, and normalizes AI-parsed resume data.
+ * Guarantees that skills, techStack, and targetRoles are strictly string[],
+ * links have https:// prefixes, numbers are valid, and no fields cause runtime crashes.
+ */
+export function normalizeParsedResumeData(raw: unknown): ParsedResumeData {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      skills: [],
+      projects: [],
+      experience: [],
+      preferences: { targetRoles: [] },
+    };
+  }
+
+  const data = raw as Record<string, unknown>;
+
+  // Helper to safely parse string arrays from either arrays or delimited strings
+  const toStringArray = (val: unknown): string[] => {
+    if (Array.isArray(val)) {
+      return val
+        .map((item) => (typeof item === 'string' ? item.trim() : String(item ?? '').trim()))
+        .filter(Boolean);
+    }
+    if (typeof val === 'string' && val.trim().length > 0) {
+      return val
+        .split(/[,;\n•|]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  // Helper to ensure valid URL with protocol
+  const formatUrl = (url: unknown): string | undefined => {
+    if (typeof url !== 'string') return undefined;
+    const trimmed = url.trim();
+    if (!trimmed) return undefined;
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (trimmed.startsWith('github.com') || trimmed.startsWith('linkedin.com') || trimmed.includes('.')) {
+      return `https://${trimmed}`;
+    }
+    return trimmed;
+  };
+
+  // 1. Personal info
+  const rawPersonal = (data.personal && typeof data.personal === 'object' ? data.personal : {}) as Record<string, unknown>;
+  const personal = {
+    fullName: typeof rawPersonal.fullName === 'string' ? rawPersonal.fullName.trim() : '',
+    email: typeof rawPersonal.email === 'string' ? rawPersonal.email.trim() : '',
+    phone: typeof rawPersonal.phone === 'string' ? rawPersonal.phone.trim() : '',
+    location: typeof rawPersonal.location === 'string' ? rawPersonal.location.trim() : '',
+    portfolioUrl: formatUrl(rawPersonal.portfolioUrl),
+    githubUrl: formatUrl(rawPersonal.githubUrl),
+    linkedinUrl: formatUrl(rawPersonal.linkedinUrl),
+  };
+
+  // 2. Education
+  const rawEducation = (data.education && typeof data.education === 'object' ? data.education : {}) as Record<string, unknown>;
+  let gradYear = 0;
+  if (typeof rawEducation.graduationYear === 'number') {
+    gradYear = Math.round(rawEducation.graduationYear);
+  } else if (typeof rawEducation.graduationYear === 'string') {
+    const yearMatch = rawEducation.graduationYear.match(/\b(19\d{2}|20\d{2})\b/);
+    if (yearMatch && yearMatch[1]) gradYear = parseInt(yearMatch[1], 10);
+  }
+
+  const education = {
+    degree: typeof rawEducation.degree === 'string' ? rawEducation.degree.trim() : '',
+    institution: typeof rawEducation.institution === 'string' ? rawEducation.institution.trim() : '',
+    graduationYear: gradYear > 1950 && gradYear < 2100 ? gradYear : new Date().getFullYear(),
+    cgpaOrPercentage: typeof rawEducation.cgpaOrPercentage === 'string' ? rawEducation.cgpaOrPercentage.trim() : '',
+  };
+
+  // 3. Skills (atomic, deduplicated)
+  const rawSkills = toStringArray(data.skills);
+  const uniqueSkills: string[] = [];
+  const seenSkill = new Set<string>();
+  for (const s of rawSkills) {
+    const lower = s.toLowerCase();
+    if (!seenSkill.has(lower)) {
+      seenSkill.add(lower);
+      uniqueSkills.push(s);
+    }
+  }
+
+  // 4. Projects
+  const rawProjects = Array.isArray(data.projects) ? data.projects : [];
+  const projects: Array<{
+    title: string;
+    techStack: string[];
+    description: string;
+    metricsOrImpact?: string;
+    repoUrl?: string;
+    liveUrl?: string;
+  }> = [];
+
+  for (const p of rawProjects) {
+    if (!p || typeof p !== 'object') continue;
+    const proj = p as Record<string, unknown>;
+    const title = typeof proj.title === 'string' ? proj.title.trim() : '';
+    if (!title) continue;
+
+    projects.push({
+      title,
+      techStack: toStringArray(proj.techStack),
+      description: typeof proj.description === 'string' ? proj.description.trim() : '',
+      metricsOrImpact: typeof proj.metricsOrImpact === 'string' ? proj.metricsOrImpact.trim() : '',
+      repoUrl: formatUrl(proj.repoUrl),
+      liveUrl: formatUrl(proj.liveUrl),
+    });
+  }
+
+  // 5. Experience
+  const rawExp = Array.isArray(data.experience) ? data.experience : [];
+  const experience: Array<{
+    role: string;
+    company: string;
+    duration: string;
+    contributions: string;
+  }> = [];
+
+  for (const e of rawExp) {
+    if (!e || typeof e !== 'object') continue;
+    const exp = e as Record<string, unknown>;
+    const role = typeof exp.role === 'string' ? exp.role.trim() : '';
+    const company = typeof exp.company === 'string' ? exp.company.trim() : '';
+    if (!role && !company) continue;
+
+    experience.push({
+      role,
+      company,
+      duration: typeof exp.duration === 'string' ? exp.duration.trim() : '',
+      contributions: typeof exp.contributions === 'string' ? exp.contributions.trim() : '',
+    });
+  }
+
+  // 6. Preferences
+  const rawPref = (data.preferences && typeof data.preferences === 'object' ? data.preferences : {}) as Record<string, unknown>;
+  const targetRoles = toStringArray(rawPref.targetRoles);
+
+  return {
+    personal,
+    education,
+    skills: uniqueSkills,
+    projects,
+    experience,
+    preferences: {
+      targetRoles,
+    },
+  };
+}
+
 export async function parseResumeWithAI(
   resumeText: string,
   apiKey: string,
   model?: string
 ): Promise<ParsedResumeData> {
   const activeModel = resolveGroqModel(model);
-  const systemPrompt = `You are an expert AI resume parser. Your job is to extract candidate profile information from raw resume text into structured JSON.
+  const systemPrompt = `You are an expert AI resume parser. Your job is to extract comprehensive, high-fidelity candidate profile information from raw resume text into structured JSON.
 Return ONLY a valid JSON object strictly matching this schema:
 {
   "personal": {
@@ -391,44 +596,48 @@ Return ONLY a valid JSON object strictly matching this schema:
     "linkedinUrl": "https://linkedin.com/in/..."
   },
   "education": {
-    "degree": "Degree name",
+    "degree": "B.Tech in Computer Science",
     "institution": "University / College Name",
     "graduationYear": 2025,
     "cgpaOrPercentage": "8.5 CGPA or 85%"
   },
-  "skills": ["Skill 1", "Skill 2"],
+  "skills": ["React", "TypeScript", "Node.js", "Python"],
   "projects": [
     {
       "title": "Project Name",
-      "techStack": ["React", "Python"],
-      "description": "Short description of the project and what it does",
-      "metricsOrImpact": "Key impact, metric, or scale if mentioned",
-      "repoUrl": "https://...",
+      "techStack": ["React", "Python", "Tailwind CSS"],
+      "description": "Clear description of the problem solved, architecture, and features.",
+      "metricsOrImpact": "Reduced latency by 40%, 10K+ monthly active users, or measurable metric.",
+      "repoUrl": "https://github.com/...",
       "liveUrl": "https://..."
     }
   ],
   "experience": [
     {
-      "role": "Title",
-      "company": "Company",
-      "duration": "June 2024 - Aug 2024",
-      "contributions": "Key responsibilities"
+      "role": "Software Engineering Intern",
+      "company": "Company Name",
+      "duration": "Jun 2024 - Aug 2024",
+      "contributions": "Key achievements, systems built, and measurable impact."
     }
   ],
   "preferences": {
-    "targetRoles": ["Role 1"]
+    "targetRoles": ["Frontend Developer", "Full Stack Developer"]
   }
 }
-Rules:
-- Extract all skills into clean, individual strings in the "skills" array (e.g. ["React", "TypeScript", "Python"]).
-- If projects are mentioned, extract title, tech stack used, and accomplishments.
-- If internships/work experiences are mentioned, extract role, company, duration, contributions.
-- Do NOT invent or fabricate information not in the resume. Use empty values if not found.
-- Output ONLY valid JSON.`;
 
-  const userPrompt = `Extract structured profile information from this resume text:\n\n${resumeText.slice(0, 12000)}`;
+EXTRACTION RULES:
+1. SKILLS: Extract individual, atomic technical and domain skills into clean strings in the "skills" array. Un-nest categories (e.g. if the resume says "Languages: C++, Python; Tools: Git, Docker", produce ["C++", "Python", "Git", "Docker"]).
+2. PROJECTS: Extract each project's title, tech stack used as an array of strings, detailed description, and any quantifiable metrics (users, speedup, accuracy, stars, cost reduction) into "metricsOrImpact".
+3. EXPERIENCE: Extract full role title, company name, start & end dates (or duration), and bulleted contributions with metrics into "contributions".
+4. EDUCATION: Extract degree name, college/university, 4-digit graduation year (number), and CGPA or percentage if present.
+5. LINKS: If GitHub, LinkedIn, or portfolio usernames/URLs are present, extract them into full URLs with https://.
+6. TARGET ROLES: Infer 2-4 appropriate internship/job roles the candidate is best suited for based on their skills and projects (e.g. ["Full Stack Developer", "Backend Engineer"]).
+7. ZERO HALLUCINATION: Do NOT fabricate details, metrics, or experiences not in the resume. Leave empty or omit if not found. Output strictly valid JSON.`;
+
+  const userPrompt = `Extract structured profile information from this resume text:\n\n${resumeText.slice(0, 28000)}`;
 
   const raw = await callGroq(apiKey, activeModel, systemPrompt, userPrompt, 0.1, true);
-  return extractJson<ParsedResumeData>(raw);
+  const parsed = extractJson<unknown>(raw);
+  return normalizeParsedResumeData(parsed);
 }
 

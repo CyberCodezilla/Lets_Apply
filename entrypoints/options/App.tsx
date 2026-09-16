@@ -11,7 +11,7 @@ import TagInput from './components/TagInput';
 import ProjectForm from './components/ProjectForm';
 import ExperienceForm from './components/ExperienceForm';
 import ApiKeyTester from './components/ApiKeyTester';
-import { parseResumeWithAI } from '../../src/utils/groq-service';
+import { parseResumeWithAI, normalizeParsedResumeData } from '../../src/utils/groq-service';
 
 type TabId = 'resume' | 'personal' | 'education' | 'skills' | 'projects' | 'experience' | 'preferences' | 'api';
 
@@ -200,7 +200,8 @@ export default function App() {
         throw new Error('Please configure your Groq API key in the "API Settings" tab first so AI can parse your resume.');
       }
 
-      const parsed = await parseResumeWithAI(text, apiKey, profile.config?.selectedModel);
+      const rawParsed = await parseResumeWithAI(text, apiKey, profile.config?.selectedModel);
+      const parsed = normalizeParsedResumeData(rawParsed);
 
       const countSkills = parsed.skills?.length || 0;
       const countProjects = parsed.projects?.length || 0;
