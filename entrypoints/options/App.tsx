@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   User, GraduationCap, Wrench, FolderGit2, Briefcase, Settings2, Target,
-  Save, CheckCircle2, Send, Sparkles, Loader2, Check, ExternalLink
+  Save, CheckCircle2, Send, Sparkles, Loader2, Check, ExternalLink, Bell, ShieldCheck
 } from 'lucide-react';
-import type { UserProfile } from '../../src/types';
+import type { UserProfile, ResumeAtsAnalysis } from '../../src/types';
 import { DEFAULT_PROFILE } from '../../src/types';
 import { getProfile, saveProfile } from '../../src/utils/storage';
 import ResumeUploader from './components/ResumeUploader';
@@ -11,7 +11,9 @@ import TagInput from './components/TagInput';
 import ProjectForm from './components/ProjectForm';
 import ExperienceForm from './components/ExperienceForm';
 import ApiKeyTester from './components/ApiKeyTester';
-import { parseResumeWithAI } from '../../src/utils/groq-service';
+import { parseResumeWithAI, normalizeParsedResumeData } from '../../src/utils/groq-service';
+import { analyzeResumeStructureAndIndustryFit } from '../../src/utils/resume-analyzer';
+import TransparencyModal from '../sidepanel/components/TransparencyModal';
 
 type TabId = 'resume' | 'personal' | 'education' | 'skills' | 'projects' | 'experience' | 'preferences' | 'api';
 
@@ -32,6 +34,7 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [resumeSuccessSummary, setResumeSuccessSummary] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [showTransparencyModal, setShowTransparencyModal] = useState(false);
 
   const profileRef = useRef<UserProfile>(DEFAULT_PROFILE);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,7 +195,11 @@ export default function App() {
 
   // Handle resume text extraction & AI auto-population
   const handleResumeExtracted = useCallback(
-    async (text: string, fileMeta: { name: string; size: number }) => {
+    async (
+      text: string,
+      fileMeta: { name: string; size: number },
+      precomputedAts?: ResumeAtsAnalysis
+    ) => {
       setResumeSuccessSummary(null);
 
       const apiKey = profile.config?.groqApiKey || (import.meta.env.WXT_GROQ_API_KEY as string);
@@ -200,7 +207,9 @@ export default function App() {
         throw new Error('Please configure your Groq API key in the "API Settings" tab first so AI can parse your resume.');
       }
 
-      const parsed = await parseResumeWithAI(text, apiKey, profile.config?.selectedModel);
+      const rawParsed = await parseResumeWithAI(text, apiKey, profile.config?.selectedModel);
+      const parsed = normalizeParsedResumeData(rawParsed);
+      const atsAnalysis = precomputedAts || analyzeResumeStructureAndIndustryFit(text, parsed);
 
       const countSkills = parsed.skills?.length || 0;
       const countProjects = parsed.projects?.length || 0;
@@ -256,6 +265,7 @@ export default function App() {
             skillsCount: countSkills,
             projectsCount: countProjects,
             experienceCount: countExp,
+            atsAnalysis,
           },
         };
         // Auto-save parsed profile
@@ -264,8 +274,12 @@ export default function App() {
         return updated;
       });
 
+      const atsBadge = atsAnalysis.isIndustryReady
+        ? `Industry Ready (${atsAnalysis.overallScore}% • Grade ${atsAnalysis.grade})`
+        : `Accepted with Tips (${atsAnalysis.overallScore}%)`;
+
       setResumeSuccessSummary(
-        `Extracted ${countSkills} skills, ${countProjects} projects, ${countExp} experiences, and contact details from ${fileMeta.name}! Profile has been updated with the new resume.`
+        `Extracted ${countSkills} skills, ${countProjects} projects, and ${countExp} experiences from ${fileMeta.name}! ATS Rating: ${atsBadge}.`
       );
     },
     [profile]
@@ -651,6 +665,87 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* ── Match Notifier Settings ── */}
+              <div className="glass-card p-6 space-y-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-la-600/20 flex items-center justify-center border border-la-500/30">
+                      <Bell className="w-5 h-5 text-la-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">Real-Time Job Match Desktop Notifications</h3>
+                      <p className="text-xs text-gray-400">
+                        Get instant browser alerts when an internship on Internshala matches your profile.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateField(
+                        'preferences',
+                        'notificationsEnabled',
+                        !(profile.preferences.notificationsEnabled ?? true)
+                      )
+                    }
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      (profile.preferences.notificationsEnabled ?? true) ? 'bg-la-500' : 'bg-surface-400'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        (profile.preferences.notificationsEnabled ?? true) ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="la-label mb-0">Minimum Match Alert Threshold</label>
+                    <span className="text-xs font-bold text-accent-green">
+                      {profile.preferences.minMatchNotificationThreshold || 80}% and above
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-2">
+                    {[70, 75, 80, 85, 90].map((val) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => updateField('preferences', 'minMatchNotificationThreshold', val)}
+                        className={`py-2 rounded-xl text-xs font-medium border transition-all ${
+                          (profile.preferences.minMatchNotificationThreshold || 80) === val
+                            ? 'bg-la-600/30 border-la-500 text-white shadow-sm'
+                            : 'bg-surface-100 border-surface-300/40 text-gray-400 hover:text-gray-200'
+                        }`}
+                      >
+                        {val}%
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Internships with a compatibility score equal to or above this threshold will trigger desktop alerts. Recommended: 80%+.
+                  </p>
+                </div>
+
+                {/* Transparency info banner */}
+                <div className="p-4 rounded-xl bg-surface-100/70 border border-surface-300/30 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2.5">
+                    <ShieldCheck className="w-5 h-5 text-accent-green shrink-0" />
+                    <p className="text-xs text-gray-300">
+                      <strong>100% Transparent & Private:</strong> Evaluated in-browser without sending data to third parties. Zero spam deduplication active.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTransparencyModal(true)}
+                    className="px-3 py-1.5 rounded-lg bg-surface-200 hover:bg-surface-300 text-xs text-la-400 hover:text-white font-medium whitespace-nowrap transition-colors"
+                  >
+                    View Matching Rubric
+                  </button>
+                </div>
+              </div>
             </section>
           )}
 
@@ -674,6 +769,14 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {/* ── Transparency Modal ── */}
+      <TransparencyModal
+        isOpen={showTransparencyModal}
+        onClose={() => setShowTransparencyModal(false)}
+        profile={profile}
+        onProfileUpdated={(p) => setProfile(p)}
+      />
     </div>
   );
 }
