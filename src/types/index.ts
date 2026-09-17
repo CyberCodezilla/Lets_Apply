@@ -22,12 +22,42 @@ export interface UserProfile {
     targetRoles: string[];
     minStipend: number;
     workMode: 'Remote' | 'In-Office' | 'Hybrid' | 'Any';
+    notificationsEnabled?: boolean;
+    minMatchNotificationThreshold?: number;
   };
   config: {
     groqApiKey: string;
     selectedModel: string;
   };
   resumeMeta?: ResumeMeta;
+}
+
+export interface ResumeAtsCategoryScores {
+  sectionStructure: number;
+  contactAndLinks: number;
+  impactAndMetrics: number;
+  skillsCategorization: number;
+  atsReadability: number;
+}
+
+export interface ResumePlatformRecommendation {
+  name: string;
+  url: string;
+  description: string;
+  bestFor: string;
+  isRecommended?: boolean;
+}
+
+export interface ResumeAtsAnalysis {
+  overallScore: number;
+  isIndustryReady: boolean;
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D';
+  statusText: string;
+  categoryScores: ResumeAtsCategoryScores;
+  strengths: string[];
+  improvements: string[];
+  recommendedPlatforms: ResumePlatformRecommendation[];
+  conversionTips: string[];
 }
 
 export interface ResumeMeta {
@@ -37,6 +67,7 @@ export interface ResumeMeta {
   skillsCount?: number;
   projectsCount?: number;
   experienceCount?: number;
+  atsAnalysis?: ResumeAtsAnalysis;
 }
 
 export interface ProjectEntry {
@@ -104,11 +135,23 @@ export type MessageType =
   | 'SCRAPE_RESULT'
   | 'FILL_FORM'
   | 'FILL_RESULT'
-  | 'OPEN_OPTIONS';
+  | 'OPEN_OPTIONS'
+  | 'NOTIFY_MATCH';
 
 export interface ExtensionMessage {
   type: MessageType;
   payload?: unknown;
+}
+
+export interface NotifyMatchPayload {
+  jobId: string;
+  title: string;
+  company: string;
+  location: string;
+  stipend: string;
+  url: string;
+  matchScore: number;
+  rationale: string[];
 }
 
 export interface ScrapeResultPayload {
@@ -152,9 +195,11 @@ export const DEFAULT_PROFILE: UserProfile = {
     targetRoles: [],
     minStipend: 0,
     workMode: 'Any',
+    notificationsEnabled: true,
+    minMatchNotificationThreshold: 80,
   },
   config: {
-    groqApiKey: (import.meta.env.WXT_GROQ_API_KEY as string) || '',
-    selectedModel: (import.meta.env.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b',
+    groqApiKey: (import.meta.env?.WXT_GROQ_API_KEY as string) || '',
+    selectedModel: (import.meta.env?.WXT_GROQ_MODEL as string) || 'openai/gpt-oss-120b',
   },
 };
