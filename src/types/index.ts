@@ -32,6 +32,34 @@ export interface UserProfile {
   resumeMeta?: ResumeMeta;
 }
 
+export interface ResumeAtsCategoryScores {
+  sectionStructure: number;
+  contactAndLinks: number;
+  impactAndMetrics: number;
+  skillsCategorization: number;
+  atsReadability: number;
+}
+
+export interface ResumePlatformRecommendation {
+  name: string;
+  url: string;
+  description: string;
+  bestFor: string;
+  isRecommended?: boolean;
+}
+
+export interface ResumeAtsAnalysis {
+  overallScore: number;
+  isIndustryReady: boolean;
+  grade: 'A+' | 'A' | 'B' | 'C' | 'D';
+  statusText: string;
+  categoryScores: ResumeAtsCategoryScores;
+  strengths: string[];
+  improvements: string[];
+  recommendedPlatforms: ResumePlatformRecommendation[];
+  conversionTips: string[];
+}
+
 export interface ResumeMeta {
   fileName: string;
   fileSize: number;
@@ -39,6 +67,7 @@ export interface ResumeMeta {
   skillsCount?: number;
   projectsCount?: number;
   experienceCount?: number;
+  atsAnalysis?: ResumeAtsAnalysis;
 }
 
 export interface ProjectEntry {

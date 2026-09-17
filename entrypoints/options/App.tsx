@@ -3,7 +3,7 @@ import {
   User, GraduationCap, Wrench, FolderGit2, Briefcase, Settings2, Target,
   Save, CheckCircle2, Send, Sparkles, Loader2, Check, ExternalLink, Bell, ShieldCheck
 } from 'lucide-react';
-import type { UserProfile } from '../../src/types';
+import type { UserProfile, ResumeAtsAnalysis } from '../../src/types';
 import { DEFAULT_PROFILE } from '../../src/types';
 import { getProfile, saveProfile } from '../../src/utils/storage';
 import ResumeUploader from './components/ResumeUploader';
@@ -12,6 +12,7 @@ import ProjectForm from './components/ProjectForm';
 import ExperienceForm from './components/ExperienceForm';
 import ApiKeyTester from './components/ApiKeyTester';
 import { parseResumeWithAI, normalizeParsedResumeData } from '../../src/utils/groq-service';
+import { analyzeResumeStructureAndIndustryFit } from '../../src/utils/resume-analyzer';
 import TransparencyModal from '../sidepanel/components/TransparencyModal';
 
 type TabId = 'resume' | 'personal' | 'education' | 'skills' | 'projects' | 'experience' | 'preferences' | 'api';
@@ -194,7 +195,11 @@ export default function App() {
 
   // Handle resume text extraction & AI auto-population
   const handleResumeExtracted = useCallback(
-    async (text: string, fileMeta: { name: string; size: number }) => {
+    async (
+      text: string,
+      fileMeta: { name: string; size: number },
+      precomputedAts?: ResumeAtsAnalysis
+    ) => {
       setResumeSuccessSummary(null);
 
       const apiKey = profile.config?.groqApiKey || (import.meta.env.WXT_GROQ_API_KEY as string);
@@ -204,6 +209,7 @@ export default function App() {
 
       const rawParsed = await parseResumeWithAI(text, apiKey, profile.config?.selectedModel);
       const parsed = normalizeParsedResumeData(rawParsed);
+      const atsAnalysis = precomputedAts || analyzeResumeStructureAndIndustryFit(text, parsed);
 
       const countSkills = parsed.skills?.length || 0;
       const countProjects = parsed.projects?.length || 0;
@@ -259,6 +265,7 @@ export default function App() {
             skillsCount: countSkills,
             projectsCount: countProjects,
             experienceCount: countExp,
+            atsAnalysis,
           },
         };
         // Auto-save parsed profile
@@ -267,8 +274,12 @@ export default function App() {
         return updated;
       });
 
+      const atsBadge = atsAnalysis.isIndustryReady
+        ? `Industry Ready (${atsAnalysis.overallScore}% • Grade ${atsAnalysis.grade})`
+        : `Accepted with Tips (${atsAnalysis.overallScore}%)`;
+
       setResumeSuccessSummary(
-        `Extracted ${countSkills} skills, ${countProjects} projects, ${countExp} experiences, and contact details from ${fileMeta.name}! Profile has been updated with the new resume.`
+        `Extracted ${countSkills} skills, ${countProjects} projects, and ${countExp} experiences from ${fileMeta.name}! ATS Rating: ${atsBadge}.`
       );
     },
     [profile]
